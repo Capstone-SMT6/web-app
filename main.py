@@ -2,28 +2,25 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import users
+from routers import users, chatbot
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Tables are managed by Alembic migrations, nothing to do on startup
     yield
 
 
 app = FastAPI(lifespan=lifespan)
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins (change in production)
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# Include our separated users router
 app.include_router(users.router)
+app.include_router(chatbot.router)
 
 
 @app.get("/")

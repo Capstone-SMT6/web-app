@@ -12,3 +12,23 @@ class User(SQLModel, table=True):
     googleId: Optional[str] = Field(default=None, unique=True)
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updatedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ChatSession(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    title: str = Field(default="New Chat")
+    
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updatedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ChatMessage(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(foreign_key="chatsession.id", index=True)
+    
+    role: str = Field(...)
+    text: str = Field(...)
+    sources: Optional[str] = Field(default=None)
+    
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

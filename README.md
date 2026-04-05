@@ -1,6 +1,6 @@
 # Capstone Backend API (FastAPI)
 
-This is the Python-based backend that handles authentication, database connections, and API requests.
+This is the Python-based backend that handles authentication (JWT), PostgreSQL database operations (SQLModel/Alembic), API requests, and the RAG Chatbot powered by ChromaDB & Gemini.
 
 ## 🛠️ Prerequisites
 - Python 3.10+
@@ -43,7 +43,14 @@ This is the Python-based backend that handles authentication, database connectio
    alembic upgrade head
    ```
 
-5. **Run the Server**
+5. **Setup GenAI & Knowledge Base**
+   Your `.env` file must contain your `GEMINI_API_KEY`.
+   Run the ingestion script to populate the ChromaDB vector store with RAG data:
+   ```bash
+   python ingest.py
+   ```
+
+6. **Run the Server**
    Start the FastAPI development server:
    ```bash
    fastapi dev main.py

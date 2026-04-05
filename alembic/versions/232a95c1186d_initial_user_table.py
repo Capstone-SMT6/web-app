@@ -33,10 +33,10 @@ def upgrade() -> None:
         sa.UniqueConstraint('googleId'),
     )
     op.create_index(op.f('ix_user_email'), 'user', ['email'], unique=True)
-    # Drop the old table that was managed by the previous ORM
+    # Drop the old table that was managed by the previous ORM (only if it exists)
     op.drop_index('User_email_key', table_name='User', if_exists=True)
     op.drop_index('User_googleId_key', table_name='User', if_exists=True)
-    op.drop_table('User')
+    op.execute('DROP TABLE IF EXISTS "User" CASCADE')
 
 
 def downgrade() -> None:
