@@ -14,14 +14,14 @@ This is the Python-based backend that handles authentication, database connectio
    # Windows
    python -m venv venv
    venv\Scripts\activate
-   
+
    # macOS/Linux
    python3 -m venv venv
    source venv/bin/activate
    ```
 
 2. **Install Dependencies**
-   Install FastAPI, Prisma, and all required packages:
+   Install FastAPI, SQLModel, Alembic, and all required packages:
    ```bash
    pip install -r requirements.txt
    ```
@@ -32,11 +32,15 @@ This is the Python-based backend that handles authentication, database connectio
    - Open `.env` and fill in your actual PostgreSQL password (`DATABASE_URL`) and generate a `SECRET_KEY`.
    - **Note:** The backend will not start if the `SECRET_KEY` is missing!
 
-4. **Setup Database (Prisma)**
-   Synchronize your Prisma schema with your local Postgres database and generate the Prisma Client for Python:
+4. **Run Database Migrations (Alembic)**
+   Apply all migrations to set up the database schema:
    ```bash
-   prisma db push
-   prisma generate
+   alembic upgrade head
+   ```
+   To create a new migration after changing `models.py`:
+   ```bash
+   alembic revision --autogenerate -m "describe_your_change"
+   alembic upgrade head
    ```
 
 5. **Run the Server**

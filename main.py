@@ -1,14 +1,15 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from database import db
+
 from routers import users
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect()
+    # Tables are managed by Alembic migrations, nothing to do on startup
     yield
-    await db.disconnect()
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -24,19 +25,23 @@ app.add_middleware(
 # Include our separated users router
 app.include_router(users.router)
 
+
 @app.get("/")
 async def read_root():
     return {"Hello": "World"}
 
+
 @app.get("/health")
 async def health_check():
     try:
-        if db.is_connected():
-            return {"status": "healthy", "database": "connected"}
-        else:
-            raise HTTPException(status_code=503, detail="Database not connected")
+        from database import engine
+        from sqlmodel import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "healthy", "database": "connected"}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database connection error: {str(e)}")
+
 
 @app.get("/items/{item_id}")
 async def read_item(item_id: int, q: str | None = None):

@@ -47,8 +47,3 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# -----------------------------------------------
-# Prisma
-# -----------------------------------------------
-# Prisma generated client (regenerated via `prisma generate`)
-prisma/client/
