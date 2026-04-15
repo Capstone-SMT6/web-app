@@ -8,6 +8,7 @@ class User(SQLModel, table=True):
     username: str
     email: str = Field(unique=True, index=True)
     password: Optional[str] = Field(default=None)
+    is_admin: bool = Field(default=False)
     authProvider: str = Field(default="local")
     googleId: Optional[str] = Field(default=None, unique=True)
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -2,15 +2,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import users, chatbot
-
+from routers import users, chatbot, admin
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
 
-
 app = FastAPI(lifespan=lifespan)
+app.add_exception_handler(admin.ExceptionRequiresRedirect, admin.redirect_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +20,7 @@ app.add_middleware(
 )
 app.include_router(users.router)
 app.include_router(chatbot.router)
+app.include_router(admin.router)
 
 
 @app.get("/")

@@ -91,7 +91,6 @@ class MessageResponse(BaseModel):
 # ── Router ────────────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def embed_query(text: str) -> list[float]:
     response = genai_client.models.embed_content(
@@ -100,7 +99,6 @@ def embed_query(text: str) -> list[float]:
         config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
     )
     return response.embeddings[0].values
-
 
 def retrieve(query: str) -> tuple[str, list[str]]:
     """Return (context_block, list_of_source_labels)."""
@@ -117,7 +115,6 @@ def retrieve(query: str) -> tuple[str, list[str]]:
     context = "\n\n---\n\n".join(docs)
     return context, sources
 
-
 def build_history(db_messages: list[ChatMessage]) -> list[types.Content]:
     """Convert stored messages to the Gemini history format."""
     valid_roles = {"user", "model"}
@@ -127,7 +124,6 @@ def build_history(db_messages: list[ChatMessage]) -> list[types.Content]:
         if msg.role in valid_roles
     ]
 
-
 SYSTEM_PROMPT = """You are a helpful and knowledgeable assistant specializing in automotive vehicles and consumer electronics.
 Answer the user's question based ONLY on the context provided below.
 If the context does not contain enough information to answer, say so honestly.
@@ -136,7 +132,6 @@ Be concise, factual, and friendly.
 CONTEXT:
 {context}
 """
-
 
 # ── Session endpoints ─────────────────────────────────────────────────────────
 @router.post("/sessions", response_model=SessionResponse)
@@ -151,7 +146,6 @@ def create_session(
     db.refresh(session)
     return session
 
-
 @router.get("/sessions", response_model=list[SessionResponse])
 def list_sessions(
     current_user: User = Depends(get_current_user),
@@ -163,7 +157,6 @@ def list_sessions(
         .order_by(ChatSession.createdAt.desc())
     ).all()
     return sessions
-
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageResponse])
 def get_messages(
@@ -192,7 +185,6 @@ def get_messages(
         ))
     return result
 
-
 @router.delete("/sessions/{session_id}")
 def delete_session(
     session_id: int,
@@ -203,7 +195,6 @@ def delete_session(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    # Delete all associated messages first
     messages = db.exec(select(ChatMessage).where(ChatMessage.session_id == session_id)).all()
     for msg in messages:
         db.delete(msg)
@@ -211,7 +202,6 @@ def delete_session(
     db.delete(session)
     db.commit()
     return {"message": "Session deleted"}
-
 
 # ── Chat endpoints ────────────────────────────────────────────────────────────
 @router.post("/sessions/{session_id}/chat", response_model=ChatResponse)
@@ -223,31 +213,23 @@ async def chat(
 ):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
-
     chat_session = db.get(ChatSession, session_id)
     if not chat_session or chat_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
-
     try:
         context, sources = retrieve(req.message)
-
-        # Load history from DB
         db_messages = db.exec(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id)
             .order_by(ChatMessage.createdAt)
         ).all()
         history = build_history(db_messages)
-
-        # Persist the user's message
         user_msg = ChatMessage(
             session_id=session_id,
             role="user",
             text=req.message,
         )
         db.add(user_msg)
-
-        # Update session title on first message
         if not db_messages:
             chat_session.title = req.message[:60]
             chat_session.updatedAt = datetime.now(timezone.utc)
@@ -265,7 +247,6 @@ async def chat(
 
         answer = response.text
 
-        # Persist the model's reply
         model_msg = ChatMessage(
             session_id=session_id,
             role="model",
@@ -279,7 +260,6 @@ async def chat(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/sessions/{session_id}/stream")
 async def chat_stream(
@@ -297,24 +277,19 @@ async def chat_stream(
     """
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
-
     chat_session = db.get(ChatSession, session_id)
     if not chat_session or chat_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
-
     try:
         context, sources = retrieve(req.message)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     db_messages = db.exec(
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
         .order_by(ChatMessage.createdAt)
     ).all()
     history = build_history(db_messages)
-
-    # Persist user message
     user_msg = ChatMessage(session_id=session_id, role="user", text=req.message)
     db.add(user_msg)
 
@@ -346,8 +321,6 @@ async def chat_stream(
         except Exception as e:
             yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
             return
-
-        # Persist model reply after stream completes
         model_msg = ChatMessage(
             session_id=session_id,
             role="model",
