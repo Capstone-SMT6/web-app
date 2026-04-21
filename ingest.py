@@ -9,6 +9,7 @@ Run this script once (and re-run whenever the RAG data changes):
 
 import os
 import glob
+import time
 import chromadb
 from google import genai
 from google.genai import types
@@ -42,14 +43,24 @@ collection = chroma_client.create_collection(COLLECTION_NAME)
 print(f"✅ Created collection '{COLLECTION_NAME}'")
 
 
-def embed_text(text: str) -> list[float]:
-    """Embed a single text using Google's text-embedding-004."""
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-    )
-    return response.embeddings[0].values
+def embed_text(text: str, retries=5) -> list[float]:
+    """Embed a single text using Google's text-embedding-004, with retry logic."""
+    for attempt in range(retries):
+        try:
+            response = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+            )
+            time.sleep(1) # Delay to prevent hitting rate limits
+            return response.embeddings[0].values
+        except Exception as e:
+            if attempt < retries - 1:
+                wait_time = 2 ** attempt
+                print(f"      [!] API Error: {e}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise e
 
 
 def load_markdown_files() -> list[dict]:
