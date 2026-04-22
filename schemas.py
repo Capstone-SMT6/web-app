@@ -13,6 +13,7 @@ class GoogleLoginRequest(BaseModel):
     email: str
     username: str
     google_id: str
+    photo_url: str | None = None
 
 class UserUpdate(BaseModel):
     username: str | None = None
