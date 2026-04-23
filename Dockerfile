@@ -9,10 +9,22 @@ RUN useradd -m -u 1000 user
 # Install system dependencies required for ChromaDB and building python packages
 RUN apt-get update && apt-get install -y \
     build-essential \
+    cmake \
+    libffi-dev \
+    libssl-dev \
+    libgomp1 \
+    curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip first
+RUN pip install --no-cache-dir --upgrade pip
 
 # Copy requirements and install them
 COPY --chown=user:user requirements.txt .
+
+# Install packages in stages to isolate errors
+RUN pip install --no-cache-dir cloudinary
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
