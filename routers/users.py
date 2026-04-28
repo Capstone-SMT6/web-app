@@ -136,6 +136,38 @@ def google_login(data: GoogleLoginRequest, session: Session = Depends(get_sessio
     return {"access_token": access_token, "token_type": "bearer", "user": db_user}
 
 
+@router.get("/me", response_model=User)
+def read_user_me(
+    current_user: User = Depends(get_current_user),
+):
+    return current_user
+
+
+@router.get("/me/stats", response_model=UserStats)
+def read_user_stats_me(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    stats = session.exec(select(UserStats).where(UserStats.user_id == current_user.id)).first()
+    if not stats:
+        stats = UserStats(user_id=current_user.id)
+        session.add(stats)
+        session.commit()
+        session.refresh(stats)
+    return stats
+
+
+@router.get("/me/fitness-profile", response_model=UserFitnessProfile)
+def read_user_fitness_profile_me(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    profile = session.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == current_user.id)).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Fitness profile not found")
+    return profile
+
+
 @router.get("/", response_model=List[User])
 def read_users(
     current_user: User = Depends(get_current_user),
