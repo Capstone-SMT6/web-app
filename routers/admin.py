@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, HTTPException, status, Form, Response
+from fastapi import APIRouter, Request, Depends, HTTPException, status, Form, Response, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
@@ -8,7 +8,8 @@ from datetime import timedelta, timezone
 from collections import defaultdict
 from routers.users import verify_password, create_access_token, SECRET_KEY, ALGORITHM
 from database import get_session
-from models import User, UserStats, WorkoutSession, ChatSession
+from models import User, UserStats, WorkoutSession, ChatSession, Exercise
+from schemas import ExerciseCreate, ExerciseUpdate
 
 class AdminLoginRequest(BaseModel):
     email: str
@@ -181,3 +182,90 @@ def admin_api_chart_registrations(
         date_str = user.createdAt.strftime("%Y-%m-%d")
         counts[date_str] += 1
     return [{"date": k, "users": v} for k, v in sorted(counts.items())]
+
+# ── Exercises API ─────────────────────────────────────────────────────────────
+
+@router.get("/api/exercises")
+def admin_api_get_exercises(
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    exercises = session.exec(select(Exercise)).all()
+    return exercises
+
+@router.post("/api/exercises")
+def admin_api_create_exercise(
+    exercise_in: ExerciseCreate,
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    # Check if slug exists
+    existing = session.exec(select(Exercise).where(Exercise.slug == exercise_in.slug)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Exercise with this slug already exists")
+    
+    exercise = Exercise(**exercise_in.model_dump())
+    session.add(exercise)
+    session.commit()
+    session.refresh(exercise)
+    return exercise
+
+@router.put("/api/exercises/{exercise_id}")
+def admin_api_update_exercise(
+    exercise_id: str,
+    exercise_in: ExerciseUpdate,
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    exercise = session.get(Exercise, exercise_id)
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+        
+    update_data = exercise_in.model_dump(exclude_unset=True)
+    
+    # Check slug collision
+    if "slug" in update_data and update_data["slug"] != exercise.slug:
+        existing = session.exec(select(Exercise).where(Exercise.slug == update_data["slug"])).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Exercise with this slug already exists")
+            
+    for key, value in update_data.items():
+        setattr(exercise, key, value)
+        
+    session.add(exercise)
+    session.commit()
+    session.refresh(exercise)
+    return exercise
+
+@router.delete("/api/exercises/{exercise_id}")
+def admin_api_delete_exercise(
+    exercise_id: str,
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    exercise = session.get(Exercise, exercise_id)
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+    
+    # Alternatively, you could do soft delete: exercise.isActive = False
+    session.delete(exercise)
+    session.commit()
+    return {"message": "Exercise deleted successfully"}
+
+@router.post("/api/exercises/upload/image")
+async def admin_api_upload_exercise_image(
+    file: UploadFile = File(...),
+    admin: User = Depends(get_admin_user_api)
+):
+    from cloudinary_storage import upload_image_to_cloudinary
+    url = await upload_image_to_cloudinary(file, folder="smafit/exercises")
+    return {"url": url}
+
+@router.post("/api/exercises/upload/video")
+async def admin_api_upload_exercise_video(
+    file: UploadFile = File(...),
+    admin: User = Depends(get_admin_user_api)
+):
+    from cloudinary_storage import upload_video_to_cloudinary
+    url = await upload_video_to_cloudinary(file, folder="smafit/exercises")
+    return {"url": url}
