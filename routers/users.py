@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
-from models import User, UserStats
+from models import User, UserStats, UserFitnessProfile
 from database import get_session
 from schemas import UserCreate, UserUpdate, UserLogin, GoogleLoginRequest
 import bcrypt

@@ -80,27 +80,6 @@ class DayTypeEnum(str, Enum):
     missed = "missed"
 
 
-class AchievementCategoryEnum(str, Enum):
-    first_session = "first_session"
-    push_up = "push_up"
-    sit_up = "sit_up"
-    streak = "streak"
-    leaderboard = "leaderboard"
-
-
-class AchievementConditionTypeEnum(str, Enum):
-    lifetime_total = "lifetime_total"
-    single_session = "single_session"
-    streak_days = "streak_days"
-    first_session = "first_session"
-    leaderboard_rank = "leaderboard_rank"
-
-
-class LeaderboardExerciseTypeEnum(str, Enum):
-    push_up = "push_up"
-    sit_up = "sit_up"
-
-
 class ChatRoleEnum(str, Enum):
     user = "user"
     system = "system"
@@ -123,7 +102,6 @@ class User(SQLModel, table=True):
     googleId: Optional[str] = Field(default=None, unique=True)
     photoUrl: Optional[str] = Field(default=None)
     notificationEnabled: bool = Field(default=True)
-    activeBadgeId: Optional[str] = Field(default=None, foreign_key="badge.id")
     deletedAt: Optional[datetime] = Field(default=None)
     createdAt: datetime = Field(default_factory=now_utc)
     updatedAt: datetime = Field(default_factory=now_utc)
@@ -134,8 +112,6 @@ class UserStats(SQLModel, table=True):
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
     user_id: str = Field(foreign_key="user.id", unique=True, index=True)
-    currentLevel: int = Field(default=1)
-    totalXp: int = Field(default=0)
     currentStreak: int = Field(default=0)
     longestStreak: int = Field(default=0)
     lastActiveDate: Optional[date] = Field(default=None)
@@ -206,7 +182,6 @@ class Exercise(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     name: str
     type: str = Field()
-    base_xp: int = Field(default=1)
     description: str = Field(sa_column=Column(Text))
     tutorialUrl: Optional[str] = Field(default=None)
 
@@ -223,7 +198,6 @@ class WorkoutSession(SQLModel, table=True):
     plan_id: Optional[str] = Field(default=None, foreign_key="exerciseplan.id")
     date: date
     duration_seconds: int = Field(default=0)
-    total_xp_earned: int = Field(default=0)
     createdAt: datetime = Field(default_factory=now_utc)
 
 
@@ -249,84 +223,6 @@ class DailyLog(SQLModel, table=True):
     user_id: str = Field(foreign_key="user.id", index=True)
     date: date
     day_type: str = Field()
-    createdAt: datetime = Field(default_factory=now_utc)
-
-
-# ---------------------------------------------------------------------------
-# Section 4: Gamification
-# ---------------------------------------------------------------------------
-
-class Achievement(SQLModel, table=True):
-    __tablename__ = "achievement"
-
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    title: str
-    description: str = Field(sa_column=Column(Text))
-    category: str = Field()
-    condition_type: str = Field()
-    required_value: int
-    xp_reward: int = Field(default=0)
-    iconUrl: Optional[str] = Field(default=None)
-
-
-class UserAchievement(SQLModel, table=True):
-    """UNIQUE(user_id, achievement_id) — each achievement earned only once."""
-    __tablename__ = "userachievement"
-    __table_args__ = (UniqueConstraint("user_id", "achievement_id", name="uq_userachievement"),)
-
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    achievement_id: str = Field(foreign_key="achievement.id")
-    earnedAt: datetime = Field(default_factory=now_utc)
-
-
-class Badge(SQLModel, table=True):
-    __tablename__ = "badge"
-
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    name: str
-    description: str = Field(sa_column=Column(Text))
-    requirement: str
-    iconUrl: Optional[str] = Field(default=None)
-
-
-class UserBadge(SQLModel, table=True):
-    """UNIQUE(user_id, badge_id) — each badge earned only once."""
-    __tablename__ = "userbadge"
-    __table_args__ = (UniqueConstraint("user_id", "badge_id", name="uq_userbadge"),)
-
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    badge_id: str = Field(foreign_key="badge.id")
-    earnedAt: datetime = Field(default_factory=now_utc)
-
-
-class PersonalRecord(SQLModel, table=True):
-    """Best reps in a single set per exercise, ever. UNIQUE(user_id, exercise_id)."""
-    __tablename__ = "personalrecord"
-    __table_args__ = (UniqueConstraint("user_id", "exercise_id", name="uq_personalrecord"),)
-
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    exercise_id: str = Field(foreign_key="exercise.id")
-    best_reps_in_session: int
-    achieved_at: datetime = Field(default_factory=now_utc)
-    updatedAt: datetime = Field(default_factory=now_utc)
-
-
-class LeaderboardSnapshot(SQLModel, table=True):
-    """Frozen weekly ranking. UNIQUE(user_id, week_start, exercise_type)."""
-    __tablename__ = "leaderboardsnapshot"
-    __table_args__ = (
-        UniqueConstraint("user_id", "week_start", "exercise_type", name="uq_leaderboard_snapshot"),
-    )
-
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    week_start: date
-    exercise_type: str = Field()
-    total_reps: int
-    rank: int
     createdAt: datetime = Field(default_factory=now_utc)
 
 
