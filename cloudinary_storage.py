@@ -30,3 +30,23 @@ async def upload_image_to_cloudinary(file: UploadFile, folder: str = "smafit/ava
         raise Exception("Failed to upload image to Cloudinary")
     finally:
         await file.seek(0)
+
+async def upload_video_to_cloudinary(file: UploadFile, folder: str = "smafit/exercises") -> str:
+    """
+    Uploads a video to Cloudinary and returns the public secure URL.
+    """
+    try:
+        file_data = await file.read()
+        result = cloudinary.uploader.upload(
+            file_data, 
+            folder=folder,
+            resource_type="video"
+        )
+        
+        return result["secure_url"]
+        
+    except Exception as e:
+        print(f"Error uploading video to Cloudinary: {e}")
+        raise Exception("Failed to upload video to Cloudinary")
+    finally:
+        await file.seek(0)
