@@ -25,12 +25,10 @@ class AuthProvider(str, Enum):
     email = "email"
     google = "google"
 
-
 class GoalEnum(str, Enum):
     weight_loss = "weight_loss"
     muscle_gain = "muscle_gain"
     maintain = "maintain"
-
 
 class DurationTargetEnum(str, Enum):
     one_month = "1_month"
@@ -44,25 +42,21 @@ class SkillLevelEnum(str, Enum):
     intermediate = "intermediate"
     advanced = "advanced"
 
-
 class IntensityEnum(str, Enum):
     low = "low"
     medium = "medium"
     high = "high"
-
 
 class DifficultyLevelEnum(str, Enum):
     level_1 = "level_1"
     level_2 = "level_2"
     level_3 = "level_3"
 
-
 class ProgressionModifierEnum(str, Enum):
     aggressive = "aggressive"
     standard = "standard"
     conservative = "conservative"
     very_conservative = "very_conservative"
-
 
 class ExerciseTypeEnum(str, Enum):
     push_up = "push_up"
@@ -73,18 +67,15 @@ class ExerciseTypeEnum(str, Enum):
     decline_push_up = "decline_push_up"
     knuckle_push_up = "knuckle_push_up"
 
-
 class DayTypeEnum(str, Enum):
     workout_completed = "workout_completed"
     rest_day = "rest_day"
     missed = "missed"
 
-
 class ChatRoleEnum(str, Enum):
     user = "user"
     system = "system"
     assistant = "assistant"
-
 
 # ---------------------------------------------------------------------------
 # Section 1: Auth & Profile
