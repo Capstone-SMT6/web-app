@@ -3,6 +3,7 @@ from datetime import datetime, date, timezone
 from enum import Enum
 from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import UniqueConstraint, JSON, Text
+from sqlalchemy.sql import func
 import uuid
 
 
@@ -77,6 +78,18 @@ class ChatRoleEnum(str, Enum):
     system = "system"
     assistant = "assistant"
 
+class ExerciseCategory(str, Enum):
+    strength = "strength"
+    cardio = "cardio"
+    flexibility = "flexibility"
+    balance = "balance"
+    recovery = "recovery"
+
+class ExerciseDifficulty(str, Enum):
+    beginner = "beginner"
+    intermediate = "intermediate"
+    advanced = "advanced"
+
 # ---------------------------------------------------------------------------
 # Section 1: Auth & Profile
 # ---------------------------------------------------------------------------
@@ -139,7 +152,6 @@ class UserFitnessProfile(SQLModel, table=True):
     skillLevel: str = Field()
     intensity: str = Field()
     equipment: List[str] = Field(default=[], sa_column=Column(JSON))
-    activeInjuries: List[str] = Field(default=[], sa_column=Column(JSON))
     fcsScoreRaw: int = Field(default=0)
     fcsScoreDowngraded: int = Field(default=0)
     difficultyLevel: str = Field()
@@ -170,11 +182,45 @@ class ExercisePlan(SQLModel, table=True):
 class Exercise(SQLModel, table=True):
     __tablename__ = "exercise"
 
-    id: str = Field(default_factory=new_uuid, primary_key=True)
-    name: str
-    type: str = Field()
-    description: str = Field(sa_column=Column(Text))
-    tutorialUrl: Optional[str] = Field(default=None)
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    
+    # Identity
+    name: str = Field(max_length=255, index=True)
+    slug: str = Field(max_length=255, unique=True, index=True)  # untuk URL/search
+    description: str
+    
+    # Categorization
+    category: ExerciseCategory
+    muscleGroups: List[str] = Field(sa_column=Column(JSON))        # primary muscles
+    secondaryMuscles: List[str] = Field(default=[], sa_column=Column(JSON))
+    equipmentRequired: List[str] = Field(default=[], sa_column=Column(JSON))
+    
+    # Gating
+    difficulty: ExerciseDifficulty
+    
+    # Guidance
+    instructions: List[str] = Field(sa_column=Column(JSON))  # step by step
+    tips: List[str] = Field(default=[], sa_column=Column(JSON))  # common mistakes
+    
+    # Media
+    imageUrl: Optional[str] = None
+    videoUrl: Optional[str] = None  # nullable, tambah later juga bisa
+    
+    # Meta
+    isActive: bool = Field(default=True)  # soft delete / hide exercise
+    
+    createdAt: datetime = Field(
+        default_factory=now_utc,
+        sa_column_kwargs={"server_default": func.now()}
+    )
+    
+    updatedAt: datetime = Field(
+        default_factory=now_utc,
+        sa_column_kwargs={
+            "server_default": func.now(),
+            "onupdate": func.now()  # Automatically updates timestamp on row modification
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +244,7 @@ class ExerciseLog(SQLModel, table=True):
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
     session_id: str = Field(foreign_key="workoutsession.id", index=True)
-    exercise_id: str = Field(foreign_key="exercise.id")
+    exercise_id: uuid.UUID = Field(foreign_key="exercise.id")
     set_number: int
     reps_completed: int
     is_manual_input: bool = Field(default=False)
