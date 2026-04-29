@@ -65,13 +65,13 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[str]
-    session_id: int
+    session_id: str
 
 class SessionCreate(BaseModel):
     title: str = "New Chat"
 
 class SessionResponse(BaseModel):
-    id: int
+    id: str
     title: str
     createdAt: datetime
 
@@ -79,7 +79,7 @@ class SessionResponse(BaseModel):
         from_attributes = True
 
 class MessageResponse(BaseModel):
-    id: int
+    id: str
     role: str
     text: str
     sources: list[str] | None
@@ -160,7 +160,7 @@ def list_sessions(
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageResponse])
 def get_messages(
-    session_id: int,
+    session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
@@ -187,7 +187,7 @@ def get_messages(
 
 @router.delete("/sessions/{session_id}")
 def delete_session(
-    session_id: int,
+    session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
@@ -206,7 +206,7 @@ def delete_session(
 # ── Chat endpoints ────────────────────────────────────────────────────────────
 @router.post("/sessions/{session_id}/chat", response_model=ChatResponse)
 async def chat(
-    session_id: int,
+    session_id: str,
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
@@ -263,7 +263,7 @@ async def chat(
 
 @router.post("/sessions/{session_id}/stream")
 async def chat_stream(
-    session_id: int,
+    session_id: str,
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),

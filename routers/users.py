@@ -104,15 +104,41 @@ def login_user(user: UserLogin, session: Session = Depends(get_session)):
 
 
 @router.post("/google-login")
-def google_login(data: GoogleLoginRequest, session: Session = Depends(get_session)):
+async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_session)):
+    import httpx
+
+    async def upload_google_photo(google_url: str) -> str | None:
+        """Download Google profile photo and re-upload to Cloudinary."""
+        try:
+            # Upgrade to higher resolution (s400 instead of s100)
+            high_res_url = google_url.split("=s")[0] + "=s400-c"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(high_res_url, follow_redirects=True)
+            if resp.status_code != 200:
+                return google_url  # fallback to original if download fails
+            import cloudinary.uploader
+            result = cloudinary.uploader.upload(
+                resp.content,
+                folder="smafit/avatars",
+                resource_type="image",
+            )
+            return result["secure_url"]
+        except Exception as e:
+            print(f"Failed to re-upload Google photo: {e}")
+            return google_url  # fallback to original
+
     db_user = session.exec(select(User).where(User.email == data.email)).first()
     if not db_user:
+        # New user — mirror photo to Cloudinary immediately
+        cloudinary_url = None
+        if data.photo_url:
+            cloudinary_url = await upload_google_photo(data.photo_url)
         db_user = User(
             username=data.username,
             email=data.email,
             authProvider="google",
             googleId=data.google_id,
-            photoUrl=data.photo_url
+            photoUrl=cloudinary_url,
         )
         session.add(db_user)
         session.flush()
@@ -120,10 +146,17 @@ def google_login(data: GoogleLoginRequest, session: Session = Depends(get_sessio
         session.commit()
         session.refresh(db_user)
     else:
-        if not db_user.googleId or not db_user.photoUrl:
+        needs_save = False
+        if not db_user.googleId:
             db_user.googleId = data.google_id
-            if data.photo_url and not db_user.photoUrl:
-                db_user.photoUrl = data.photo_url
+            needs_save = True
+        # Re-upload only if still pointing at Google's CDN (lh3.googleusercontent)
+        if data.photo_url and (
+            not db_user.photoUrl or "googleusercontent" in db_user.photoUrl
+        ):
+            db_user.photoUrl = await upload_google_photo(data.photo_url)
+            needs_save = True
+        if needs_save:
             db_user.updatedAt = datetime.now(timezone.utc)
             session.add(db_user)
             session.commit()
