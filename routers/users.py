@@ -109,6 +109,11 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
 
     async def upload_google_photo(google_url: str) -> str | None:
         """Download Google profile photo and re-upload to Cloudinary."""
+        from urllib.parse import urlparse
+        parsed = urlparse(google_url)
+        if not parsed.netloc.endswith("googleusercontent.com"):
+            return google_url
+
         try:
             # Upgrade to higher resolution (s400 instead of s100)
             high_res_url = google_url.split("=s")[0] + "=s400-c"
@@ -215,6 +220,9 @@ def read_user(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if str(current_user.id) != str(user_id) and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to access this user")
+
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -228,11 +236,17 @@ def update_user(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if str(current_user.id) != str(user_id) and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to update this user")
+
     db_user = session.get(User, user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
     update_data = user_update.model_dump(exclude_unset=True)
+    if "is_admin" in update_data and not current_user.is_admin:
+        del update_data["is_admin"]
+
     if "password" in update_data:
         update_data["password"] = get_password_hash(update_data["password"])
 
@@ -278,6 +292,9 @@ def delete_user(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if str(current_user.id) != str(user_id) and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this user")
+
     db_user = session.get(User, user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")

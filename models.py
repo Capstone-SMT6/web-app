@@ -31,11 +31,9 @@ class GoalEnum(str, Enum):
     muscle_gain = "muscle_gain"
     maintain = "maintain"
 
-class DurationTargetEnum(str, Enum):
-    one_month = "1_month"
-    three_months = "3_months"
-    six_months = "6_months"
-    long_term = "long_term"
+class GenderEnum(str, Enum):
+    male = "male"
+    female = "female"
 
 
 class SkillLevelEnum(str, Enum):
@@ -52,12 +50,6 @@ class DifficultyLevelEnum(str, Enum):
     level_1 = "level_1"
     level_2 = "level_2"
     level_3 = "level_3"
-
-class ProgressionModifierEnum(str, Enum):
-    aggressive = "aggressive"
-    standard = "standard"
-    conservative = "conservative"
-    very_conservative = "very_conservative"
 
 class ExerciseTypeEnum(str, Enum):
     push_up = "push_up"
@@ -102,13 +94,13 @@ class User(SQLModel, table=True):
     email: str = Field(unique=True, index=True)
     password: Optional[str] = Field(default=None)
     is_admin: bool = Field(default=False)
-    authProvider: str = Field(default=AuthProvider.email)
-    googleId: Optional[str] = Field(default=None, unique=True)
-    photoUrl: Optional[str] = Field(default=None)
-    notificationEnabled: bool = Field(default=True)
-    deletedAt: Optional[datetime] = Field(default=None)
-    createdAt: datetime = Field(default_factory=now_utc)
-    updatedAt: datetime = Field(default_factory=now_utc)
+    authProvider: str = Field(default=AuthProvider.email, sa_column_kwargs={"name": "auth_provider"})
+    googleId: Optional[str] = Field(default=None, unique=True, sa_column_kwargs={"name": "google_id"})
+    photoUrl: Optional[str] = Field(default=None, sa_column_kwargs={"name": "photo_url"})
+    notificationEnabled: bool = Field(default=True, sa_column_kwargs={"name": "notification_enabled"})
+    deletedAt: Optional[datetime] = Field(default=None, sa_column_kwargs={"name": "deleted_at"})
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 
 
 class UserStats(SQLModel, table=True):
@@ -116,12 +108,12 @@ class UserStats(SQLModel, table=True):
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
     user_id: str = Field(foreign_key="user.id", unique=True, index=True)
-    currentStreak: int = Field(default=0)
-    longestStreak: int = Field(default=0)
-    lastActiveDate: Optional[date] = Field(default=None)
-    totalPushUps: int = Field(default=0)
-    totalSitUps: int = Field(default=0)
-    updatedAt: datetime = Field(default_factory=now_utc)
+    currentStreak: int = Field(default=0, sa_column_kwargs={"name": "current_streak"})
+    longestStreak: int = Field(default=0, sa_column_kwargs={"name": "longest_streak"})
+    lastActiveDate: Optional[date] = Field(default=None, sa_column_kwargs={"name": "last_active_date"})
+    totalPushUps: int = Field(default=0, sa_column_kwargs={"name": "total_push_ups"})
+    totalSitUps: int = Field(default=0, sa_column_kwargs={"name": "total_sit_ups"})
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 
 
 class PasswordResetToken(SQLModel, table=True):
@@ -130,9 +122,9 @@ class PasswordResetToken(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     user_id: str = Field(foreign_key="user.id", index=True)
     token: str = Field(index=True)
-    expiresAt: datetime
-    usedAt: Optional[datetime] = Field(default=None)
-    createdAt: datetime = Field(default_factory=now_utc)
+    expiresAt: datetime = Field(sa_column_kwargs={"name": "expires_at"})
+    usedAt: Optional[datetime] = Field(default=None, sa_column_kwargs={"name": "used_at"})
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 
 # ---------------------------------------------------------------------------
@@ -144,19 +136,23 @@ class UserFitnessProfile(SQLModel, table=True):
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
     user_id: str = Field(foreign_key="user.id", unique=True, index=True)
-    goal: str = Field()
-    durationTarget: str = Field()
+    goal: GoalEnum = Field()
     age: int
+    gender: GenderEnum = Field()
     height: float
     weight: float
-    skillLevel: str = Field()
-    intensity: str = Field()
-    equipment: List[str] = Field(default=[], sa_column=Column(JSON))
-    fcsScoreRaw: int = Field(default=0)
-    fcsScoreDowngraded: int = Field(default=0)
-    difficultyLevel: str = Field()
-    createdAt: datetime = Field(default_factory=now_utc)
-    updatedAt: datetime = Field(default_factory=now_utc)
+    skillLevel: SkillLevelEnum = Field(sa_column_kwargs={"name": "skill_level"})
+    intensity: IntensityEnum = Field()
+    equipment: List[str] = Field(default=[], sa_column=Column("equipment", JSON))
+    fcsScoreRaw: int = Field(default=0, sa_column_kwargs={"name": "fcs_score_raw"})
+    difficultyLevel: DifficultyLevelEnum = Field(sa_column_kwargs={"name": "difficulty_level"})
+    bmr: float = Field(default=0.0)
+    tdee: float = Field(default=0.0)
+    target_daily_kcal: float = Field(default=0.0)
+    macros_json: dict = Field(default={}, sa_column=Column(JSON))
+    difficulty_gate_applied: bool = Field(default=False)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 
 
 class ExercisePlan(SQLModel, table=True):
@@ -166,17 +162,36 @@ class ExercisePlan(SQLModel, table=True):
     user_id: str = Field(foreign_key="user.id", index=True)
     fitness_profile_id: str = Field(foreign_key="userfitnessprofile.id")
     is_active: bool = Field(default=True)
-    goal: str = Field()
-    duration_target: str = Field()
+    goal: GoalEnum = Field()
     days_per_week: int
     start_date: date
-    difficulty_level: str = Field()
-    schedule_json: dict = Field(default={}, sa_column=Column(JSON))
-    applied_constraints: List[str] = Field(default=[], sa_column=Column(JSON))
+    difficulty_level: DifficultyLevelEnum = Field()
+    applied_constraints: List[str] = Field(default=[], sa_column=Column("applied_constraints", JSON))
     previous_plan_id: Optional[str] = Field(default=None, foreign_key="exerciseplan.id")
-    progression_modifier: str = Field()
-    createdAt: datetime = Field(default_factory=now_utc)
-    updatedAt: datetime = Field(default_factory=now_utc)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
+
+class PlanDay(SQLModel, table=True):
+    __tablename__ = "plan_day"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    plan_id: str = Field(foreign_key="exerciseplan.id", index=True)
+    day_of_week: int = Field(ge=0, le=6)  # 0=Monday, 6=Sunday
+    is_rest_day: bool = Field(default=False)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+
+
+class PlanDayExercise(SQLModel, table=True):
+    __tablename__ = "plan_day_exercise"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    plan_day_id: str = Field(foreign_key="plan_day.id", index=True)
+    exercise_id: uuid.UUID = Field(foreign_key="exercise.id")
+    order: int
+    target_sets: int
+    target_reps: Optional[int] = Field(default=None)
+    target_duration_seconds: Optional[int] = Field(default=None)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 
 class Exercise(SQLModel, table=True):
@@ -191,9 +206,9 @@ class Exercise(SQLModel, table=True):
     
     # Categorization
     category: ExerciseCategory
-    muscleGroups: List[str] = Field(sa_column=Column(JSON))        # primary muscles
-    secondaryMuscles: List[str] = Field(default=[], sa_column=Column(JSON))
-    equipmentRequired: List[str] = Field(default=[], sa_column=Column(JSON))
+    muscleGroups: List[str] = Field(sa_column=Column("muscle_groups", JSON))        # primary muscles
+    secondaryMuscles: List[str] = Field(default=[], sa_column=Column("secondary_muscles", JSON))
+    equipmentRequired: List[str] = Field(default=[], sa_column=Column("equipment_required", JSON))
     
     # Gating
     difficulty: ExerciseDifficulty
@@ -203,22 +218,23 @@ class Exercise(SQLModel, table=True):
     tips: List[str] = Field(default=[], sa_column=Column(JSON))  # common mistakes
     
     # Media
-    imageUrl: Optional[str] = None
-    videoUrl: Optional[str] = None  # nullable, tambah later juga bisa
+    imageUrl: Optional[str] = Field(default=None, sa_column_kwargs={"name": "image_url"})
+    videoUrl: Optional[str] = Field(default=None, sa_column_kwargs={"name": "video_url"})
     
     # Meta
-    isActive: bool = Field(default=True)  # soft delete / hide exercise
+    isActive: bool = Field(default=True, sa_column_kwargs={"name": "is_active"})
     
     createdAt: datetime = Field(
         default_factory=now_utc,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column_kwargs={"server_default": func.now(), "name": "created_at"}
     )
     
     updatedAt: datetime = Field(
         default_factory=now_utc,
         sa_column_kwargs={
             "server_default": func.now(),
-            "onupdate": func.now()  # Automatically updates timestamp on row modification
+            "onupdate": func.now(),
+            "name": "updated_at"
         }
     )
 
@@ -235,7 +251,7 @@ class WorkoutSession(SQLModel, table=True):
     plan_id: Optional[str] = Field(default=None, foreign_key="exerciseplan.id")
     date: date
     duration_seconds: int = Field(default=0)
-    createdAt: datetime = Field(default_factory=now_utc)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 
 class ExerciseLog(SQLModel, table=True):
@@ -248,7 +264,7 @@ class ExerciseLog(SQLModel, table=True):
     set_number: int
     reps_completed: int
     is_manual_input: bool = Field(default=False)
-    createdAt: datetime = Field(default_factory=now_utc)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 
 class DailyLog(SQLModel, table=True):
@@ -260,7 +276,7 @@ class DailyLog(SQLModel, table=True):
     user_id: str = Field(foreign_key="user.id", index=True)
     date: date
     day_type: str = Field()
-    createdAt: datetime = Field(default_factory=now_utc)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +289,8 @@ class ChatSession(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     user_id: str = Field(foreign_key="user.id", index=True)
     title: str = Field(default="New Chat")
-    createdAt: datetime = Field(default_factory=now_utc)
-    updatedAt: datetime = Field(default_factory=now_utc)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 
 
 class ChatMessage(SQLModel, table=True):
@@ -285,4 +301,4 @@ class ChatMessage(SQLModel, table=True):
     role: str = Field()
     text: str = Field(sa_column=Column(Text))
     sources: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    createdAt: datetime = Field(default_factory=now_utc)
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
