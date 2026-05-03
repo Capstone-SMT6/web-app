@@ -83,11 +83,14 @@ def login_submit(
     access_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(days=1))
 
     redirect = RedirectResponse(url="/admin/dashboard", status_code=302)
+    import os
+    is_production = os.getenv("ENVIRONMENT", "development") == "production"
+
     redirect.set_cookie(
         key="admin_session",
         value=access_token,
         httponly=True,
-        secure=False,
+        secure=is_production,
         max_age=86400,
         samesite="lax"
     )
