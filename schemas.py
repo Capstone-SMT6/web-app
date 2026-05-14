@@ -18,6 +18,9 @@ class GoogleLoginRequest(BaseModel):
     google_id: str | None = None
     photo_url: str | None = None
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
 class UserUpdate(BaseModel):
     username: str | None = None
     email: str | None = None

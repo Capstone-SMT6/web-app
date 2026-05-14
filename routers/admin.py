@@ -155,11 +155,13 @@ def admin_api_users(
     admin: User = Depends(get_admin_user_api),
     session: Session = Depends(get_session)
 ):
-    users = session.exec(select(User)).all()
-    result = []
-    for user in users:
-        stats = session.exec(select(UserStats).where(UserStats.user_id == user.id)).first()
-        result.append({
+    # Performansi: Memperbaiki masalah N+1 Query dengan menggunakan outerjoin
+    statement = select(User, UserStats).outerjoin(UserStats, User.id == UserStats.user_id)
+    results = session.exec(statement).all()
+    
+    output = []
+    for user, stats in results:
+        output.append({
             "id": user.id,
             "username": user.username,
             "email": user.email,
@@ -172,7 +174,7 @@ def admin_api_users(
             "currentStreak": stats.currentStreak if stats else 0,
             "longestStreak": stats.longestStreak if stats else 0,
         })
-    return result
+    return output
 
 @router.get("/api/chart/registrations")
 def admin_api_chart_registrations(

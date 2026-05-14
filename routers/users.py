@@ -1,16 +1,17 @@
 from typing import List
 import jwt
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
 from models import User, UserStats, UserFitnessProfile
 from database import get_session
-from schemas import UserCreate, UserUpdate, UserLogin, GoogleLoginRequest
+from schemas import UserCreate, UserUpdate, UserLogin, GoogleLoginRequest, RefreshTokenRequest
 import bcrypt
 import os
 from dotenv import load_dotenv
 from cloudinary_storage import upload_image_to_cloudinary
+from limiter import limiter
 
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -21,7 +22,8 @@ if not SECRET_KEY:
     )
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 43200
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
+REFRESH_TOKEN_EXPIRE_MINUTES = 43200
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
 
@@ -40,8 +42,18 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire, "type": "access"})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def create_refresh_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire, "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -54,13 +66,15 @@ def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Dep
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") == "refresh":
+            raise credentials_exception
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception
     user = session.exec(select(User).where(User.email == email)).first()
-    if user is None:
+    if user is None or user.deletedAt is not None:
         raise credentials_exception
     return user
 
@@ -72,7 +86,8 @@ router = APIRouter(
 
 
 @router.post("/", response_model=User)
-def create_user(user: UserCreate, session: Session = Depends(get_session)):
+@limiter.limit("20/minute")
+def create_user(request: Request, user: UserCreate, session: Session = Depends(get_session)):
     existing = session.exec(select(User).where(User.email == user.email)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -91,20 +106,33 @@ def create_user(user: UserCreate, session: Session = Depends(get_session)):
 
 
 @router.post("/login")
-def login_user(user: UserLogin, session: Session = Depends(get_session)):
+@limiter.limit("50/minute")
+def login_user(request: Request, user: UserLogin, session: Session = Depends(get_session)):
     db_user = session.exec(select(User).where(User.email == user.email)).first()
     if not db_user or not db_user.password or not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if db_user.deletedAt is not None:
+        raise HTTPException(status_code=403, detail="Akun telah dihapus")
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": db_user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "user": db_user}
+    refresh_token_expires = timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+    refresh_token = create_refresh_token(
+        data={"sub": db_user.email}, expires_delta=refresh_token_expires
+    )
+    return {
+        "access_token": access_token, 
+        "refresh_token": refresh_token,
+        "token_type": "bearer", 
+        "user": db_user
+    }
 
 
 @router.post("/google-login")
-async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_session)):
+@limiter.limit("50/minute")
+async def google_login(request: Request, data: GoogleLoginRequest, session: Session = Depends(get_session)):
     import os
     from google.oauth2 import id_token
     from google.auth.transport import requests as google_requests
@@ -154,6 +182,9 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
             return google_url  # fallback to original
 
     db_user = session.exec(select(User).where(User.email == verified_email)).first()
+    if db_user and db_user.deletedAt is not None:
+        raise HTTPException(status_code=403, detail="Akun telah dihapus")
+        
     if not db_user:
         # New user — mirror photo to Cloudinary immediately
         cloudinary_url = None
@@ -192,7 +223,43 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
     access_token = create_access_token(
         data={"sub": db_user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "user": db_user}
+    refresh_token_expires = timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+    refresh_token = create_refresh_token(
+        data={"sub": db_user.email}, expires_delta=refresh_token_expires
+    )
+    return {
+        "access_token": access_token, 
+        "refresh_token": refresh_token,
+        "token_type": "bearer", 
+        "user": db_user
+    }
+
+@router.post("/refresh")
+@limiter.limit("20/minute")
+def refresh_token(request: Request, data: RefreshTokenRequest, session: Session = Depends(get_session)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate refresh token",
+    )
+    try:
+        payload = jwt.decode(data.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise credentials_exception
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except jwt.InvalidTokenError:
+        raise credentials_exception
+        
+    user = session.exec(select(User).where(User.email == email)).first()
+    if user is None or user.deletedAt is not None:
+        raise credentials_exception
+        
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @router.get("/me", response_model=User)
@@ -232,7 +299,7 @@ def read_users(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    return session.exec(select(User)).all()
+    return session.exec(select(User).where(User.deletedAt == None)).all()
 
 
 @router.get("/{user_id}", response_model=User)
@@ -245,7 +312,7 @@ def read_user(
         raise HTTPException(status_code=403, detail="Not authorized to access this user")
 
     user = session.get(User, user_id)
-    if not user:
+    if not user or user.deletedAt is not None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
