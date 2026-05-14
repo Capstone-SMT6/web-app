@@ -12,9 +12,10 @@ class UserLogin(BaseModel):
     password: str
 
 class GoogleLoginRequest(BaseModel):
-    email: str
-    username: str
-    google_id: str
+    id_token: str
+    email: str | None = None
+    username: str | None = None
+    google_id: str | None = None
     photo_url: str | None = None
 
 class UserUpdate(BaseModel):

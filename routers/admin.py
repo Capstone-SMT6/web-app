@@ -260,6 +260,16 @@ async def admin_api_upload_exercise_image(
     file: UploadFile = File(...),
     admin: User = Depends(get_admin_user_api)
 ):
+    if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
+        raise HTTPException(status_code=400, detail="Invalid file format. Only JPEG, PNG, and WEBP are allowed.")
+        
+    MAX_IMAGE_SIZE = 5 * 1024 * 1024
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    await file.seek(0)
+    if file_size > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=413, detail="File size too large. Maximum size is 5MB.")
+
     from cloudinary_storage import upload_image_to_cloudinary
     url = await upload_image_to_cloudinary(file, folder="smafit/exercises")
     return {"url": url}
@@ -269,6 +279,16 @@ async def admin_api_upload_exercise_video(
     file: UploadFile = File(...),
     admin: User = Depends(get_admin_user_api)
 ):
+    if file.content_type not in ["video/mp4", "video/quicktime", "video/x-m4v"]:
+        raise HTTPException(status_code=400, detail="Invalid file format. Only MP4, MOV, and M4V are allowed.")
+        
+    MAX_VIDEO_SIZE = 50 * 1024 * 1024 # 50 MB
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    await file.seek(0)
+    if file_size > MAX_VIDEO_SIZE:
+        raise HTTPException(status_code=413, detail="File size too large. Maximum size is 50MB.")
+
     from cloudinary_storage import upload_video_to_cloudinary
     url = await upload_video_to_cloudinary(file, folder="smafit/exercises")
     return {"url": url}

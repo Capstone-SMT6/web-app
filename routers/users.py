@@ -105,7 +105,28 @@ def login_user(user: UserLogin, session: Session = Depends(get_session)):
 
 @router.post("/google-login")
 async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_session)):
+    import os
+    from google.oauth2 import id_token
+    from google.auth.transport import requests as google_requests
     import httpx
+
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Server misconfiguration: GOOGLE_CLIENT_ID is not set.")
+
+    if not data.id_token:
+        raise HTTPException(status_code=400, detail="id_token is required for secure login")
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            data.id_token, google_requests.Request(), GOOGLE_CLIENT_ID
+        )
+        verified_email = idinfo['email']
+        verified_google_id = idinfo['sub']
+        verified_username = idinfo.get('name', data.username or verified_email.split('@')[0])
+        verified_photo_url = idinfo.get('picture', data.photo_url)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid Google Token: {str(e)}")
 
     async def upload_google_photo(google_url: str) -> str | None:
         """Download Google profile photo and re-upload to Cloudinary."""
@@ -132,17 +153,17 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
             print(f"Failed to re-upload Google photo: {e}")
             return google_url  # fallback to original
 
-    db_user = session.exec(select(User).where(User.email == data.email)).first()
+    db_user = session.exec(select(User).where(User.email == verified_email)).first()
     if not db_user:
         # New user — mirror photo to Cloudinary immediately
         cloudinary_url = None
-        if data.photo_url:
-            cloudinary_url = await upload_google_photo(data.photo_url)
+        if verified_photo_url:
+            cloudinary_url = await upload_google_photo(verified_photo_url)
         db_user = User(
-            username=data.username,
-            email=data.email,
+            username=verified_username,
+            email=verified_email,
             authProvider="google",
-            googleId=data.google_id,
+            googleId=verified_google_id,
             photoUrl=cloudinary_url,
         )
         session.add(db_user)
@@ -153,13 +174,13 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
     else:
         needs_save = False
         if not db_user.googleId:
-            db_user.googleId = data.google_id
+            db_user.googleId = verified_google_id
             needs_save = True
         # Re-upload only if still pointing at Google's CDN (lh3.googleusercontent)
-        if data.photo_url and (
+        if verified_photo_url and (
             not db_user.photoUrl or "googleusercontent" in db_user.photoUrl
         ):
-            db_user.photoUrl = await upload_google_photo(data.photo_url)
+            db_user.photoUrl = await upload_google_photo(verified_photo_url)
             needs_save = True
         if needs_save:
             db_user.updatedAt = datetime.now(timezone.utc)
@@ -273,6 +294,18 @@ async def upload_avatar(
     db_user = session.get(User, user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
+        
+    # Validate MIME type
+    if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
+        raise HTTPException(status_code=400, detail="Invalid file format. Only JPEG, PNG, and WEBP are allowed.")
+        
+    # Validate File Size (Max 5MB)
+    MAX_IMAGE_SIZE = 5 * 1024 * 1024
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    await file.seek(0)
+    if file_size > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=413, detail="File size too large. Maximum size is 5MB.")
         
     public_url = await upload_image_to_cloudinary(file, folder="smafit/avatars")
     

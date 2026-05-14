@@ -20,7 +20,7 @@ from google import genai
 from google.genai import types
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
 from dotenv import load_dotenv
 
@@ -75,8 +75,7 @@ class SessionResponse(BaseModel):
     title: str
     createdAt: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class MessageResponse(BaseModel):
     id: str
@@ -85,8 +84,7 @@ class MessageResponse(BaseModel):
     sources: list[str] | None
     createdAt: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ── Router ────────────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
