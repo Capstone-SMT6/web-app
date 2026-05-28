@@ -3,7 +3,7 @@ nama: Muscle-up
 kategori: Latihan dengan Alat Rumahan (Home Equipment)
 sub_kategori: Tiang Pull-Up (Pull-Up Bar)
 level: Eksper (Tingkat Sangat Mahir)
-fokus_otot: [Full Upper Body, Chest, Lats, Triceps, Shoulders, Core]
+fokus_otot: [Full Upper Body,  Lats, Triceps, Shoulders, Core]
 peralatan: Tiang Pull-up (yang kokoh dan memiliki ruang di atasnya)
 ---
 
