@@ -1,12 +1,13 @@
 from typing import List
 import jwt
+import random
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
-from models import User, UserStats, UserFitnessProfile
+from models import User, UserStats, UserFitnessProfile, OTPVerification
 from database import get_session
-from schemas import UserCreate, UserUpdate, UserLogin, GoogleLoginRequest
+from schemas import UserCreate, UserUpdate, UserLogin, GoogleLoginRequest, OTPSendRequest, OTPVerifyRequest, PasswordResetRequest, ChangePasswordRequest
 import bcrypt
 import os
 from dotenv import load_dotenv
@@ -76,6 +77,19 @@ def create_user(user: UserCreate, session: Session = Depends(get_session)):
     existing = session.exec(select(User).where(User.email == user.email)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
+
+    otp_verified = session.exec(
+        select(OTPVerification)
+        .where(OTPVerification.email == user.email)
+        .where(OTPVerification.purpose == "register")
+        .where(OTPVerification.verifiedAt != None)
+        .order_by(OTPVerification.verifiedAt.desc())
+    ).first()
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if not otp_verified or otp_verified.verifiedAt.replace(tzinfo=None) < now_utc - timedelta(minutes=15):
+        raise HTTPException(status_code=400, detail="Email is not verified via OTP")
+
     hashed_password = get_password_hash(user.password)
     new_user = User(
         username=user.username,
@@ -172,6 +186,105 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
         data={"sub": db_user.email}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer", "user": db_user}
+
+
+# ---------------------------------------------------------------------------
+# OTP Routes
+# ---------------------------------------------------------------------------
+
+@router.post("/otp/send")
+def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
+    if request.purpose == "reset_password":
+        user = session.exec(select(User).where(User.email == request.email)).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Email is not registered")
+    elif request.purpose == "register":
+        user = session.exec(select(User).where(User.email == request.email)).first()
+        if user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    code = f"{random.randint(100000, 999999)}"
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    otp_record = OTPVerification(
+        email=request.email,
+        code=code,
+        purpose=request.purpose,
+        expiresAt=expires_at
+    )
+    session.add(otp_record)
+    session.commit()
+
+    try:
+        from mail_helper import send_otp_email
+        send_otp_email(request.email, code, request.purpose)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": "OTP sent successfully"}
+
+
+@router.post("/otp/verify")
+def verify_otp(request: OTPVerifyRequest, session: Session = Depends(get_session)):
+    now = datetime.now(timezone.utc)
+    otp_record = session.exec(
+        select(OTPVerification)
+        .where(OTPVerification.email == request.email)
+        .where(OTPVerification.purpose == request.purpose)
+        .where(OTPVerification.code == request.code)
+        .where(OTPVerification.expiresAt > now)
+        .where(OTPVerification.verifiedAt == None)
+        .order_by(OTPVerification.createdAt.desc())
+    ).first()
+
+    if not otp_record:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
+
+    otp_record.verifiedAt = now
+    session.add(otp_record)
+    session.commit()
+    return {"message": "OTP verified successfully"}
+
+
+@router.post("/reset-password")
+def reset_password(request: PasswordResetRequest, session: Session = Depends(get_session)):
+    otp_verified = session.exec(
+        select(OTPVerification)
+        .where(OTPVerification.email == request.email)
+        .where(OTPVerification.purpose == "reset_password")
+        .where(OTPVerification.verifiedAt != None)
+        .order_by(OTPVerification.verifiedAt.desc())
+    ).first()
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if not otp_verified or otp_verified.verifiedAt.replace(tzinfo=None) < now_utc - timedelta(minutes=15):
+        raise HTTPException(status_code=400, detail="OTP code has not been verified for password reset")
+
+    user = session.exec(select(User).where(User.email == request.email)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.password = get_password_hash(request.password)
+    user.updatedAt = datetime.now(timezone.utc)
+    session.add(user)
+    session.commit()
+    return {"message": "Password reset successfully"}
+
+
+@router.post("/change-password")
+def change_password_logged_in(
+    request: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not current_user.password or not verify_password(request.current_password, current_user.password):
+        raise HTTPException(status_code=400, detail="Password lama salah")
+
+    current_user.password = get_password_hash(request.new_password)
+    current_user.updatedAt = datetime.now(timezone.utc)
+    session.add(current_user)
+    session.commit()
+    return {"message": "Password berhasil diperbarui"}
 
 
 @router.get("/me", response_model=User)

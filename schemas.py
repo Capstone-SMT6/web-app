@@ -51,3 +51,26 @@ class ExerciseUpdate(BaseModel):
     imageUrl: Optional[str] = None
     videoUrl: Optional[str] = None
     isActive: Optional[bool] = None
+
+
+class OTPSendRequest(BaseModel):
+    email: str
+    purpose: str
+
+
+class OTPVerifyRequest(BaseModel):
+    email: str
+    code: str
+    purpose: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
