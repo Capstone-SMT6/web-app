@@ -127,6 +127,18 @@ class PasswordResetToken(SQLModel, table=True):
     createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 
+class OTPVerification(SQLModel, table=True):
+    __tablename__ = "otpverification"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    email: str = Field(index=True)
+    code: str = Field()
+    purpose: str = Field()
+    expiresAt: datetime = Field(sa_column_kwargs={"name": "expires_at"})
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+    verifiedAt: Optional[datetime] = Field(default=None, sa_column_kwargs={"name": "verified_at"})
+
+
 # ---------------------------------------------------------------------------
 # Section 2: Onboarding & Exercise Plan
 # ---------------------------------------------------------------------------
