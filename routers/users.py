@@ -1,13 +1,35 @@
 from typing import List
 import jwt
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
-from models import User, UserStats, UserFitnessProfile, OTPVerification
+from models import (
+    DifficultyLevelEnum,
+    ExercisePlan,
+    GenderEnum,
+    GoalEnum,
+    IntensityEnum,
+    OTPVerification,
+    PlanDay,
+    SkillLevelEnum,
+    User,
+    UserFitnessProfile,
+    UserStats,
+)
 from database import get_session
-from schemas import UserCreate, UserUpdate, UserLogin, GoogleLoginRequest, OTPSendRequest, OTPVerifyRequest, PasswordResetRequest, ChangePasswordRequest
+from schemas import (
+    GoogleLoginRequest,
+    OnboardingSubmit,
+    UserCreate,
+    UserLogin,
+    UserUpdate,
+    OTPSendRequest,
+    OTPVerifyRequest,
+    PasswordResetRequest,
+    ChangePasswordRequest,
+)
 import bcrypt
 import os
 from dotenv import load_dotenv
@@ -70,6 +92,205 @@ router = APIRouter(
     prefix="/api/users",
     tags=["users"],
 )
+
+
+DAY_INDEX = {
+    "senin": 0,
+    "selasa": 1,
+    "rabu": 2,
+    "kamis": 3,
+    "jumat": 4,
+    "sabtu": 5,
+    "minggu": 6,
+}
+
+
+def _validate_training_days(intensity: str, selected_days: list[str]) -> None:
+    count = len(selected_days)
+    if intensity == "rendah" and count != 3:
+        raise HTTPException(status_code=400, detail="Intensitas rendah harus memilih 3 hari latihan")
+    if intensity == "sedang" and count != 4:
+        raise HTTPException(status_code=400, detail="Intensitas sedang harus memilih 4 hari latihan")
+    if intensity == "tinggi" and count not in {5, 6}:
+        raise HTTPException(status_code=400, detail="Intensitas tinggi harus memilih 5 atau 6 hari latihan")
+
+
+def _calculate_onboarding(payload: OnboardingSubmit) -> dict:
+    applied_constraints: list[str] = []
+
+    height_m = payload.height / 100
+    bmi = round(payload.weight / (height_m**2), 1)
+    bmi_score = 20 if 18.5 <= bmi < 25 else (15 if 25 <= bmi < 30 else (10 if bmi < 18.5 else 5))
+    age_score = 20 if 15 <= payload.age <= 30 else (10 if 31 <= payload.age <= 45 else 0)
+    fcs_score = bmi_score + age_score
+
+    if fcs_score >= 31:
+        capacity = "ahli"
+    elif fcs_score >= 16:
+        capacity = "menengah"
+    else:
+        capacity = "pemula"
+
+    difficulty = capacity
+    if payload.skill_level == "pemula":
+        if capacity == "ahli":
+            difficulty = "menengah"
+            applied_constraints.append("Gate: Fisik ahli tapi teknik pemula, level di-cap ke menengah.")
+        elif fcs_score >= 25:
+            difficulty = "menengah"
+            applied_constraints.append("Gate: Fisik mumpuni, pemula dinaikkan ke menengah.")
+        else:
+            difficulty = "pemula"
+    elif payload.skill_level == "menengah" and capacity == "pemula":
+        difficulty = "pemula"
+        applied_constraints.append("Gate: Fisik terlalu rendah untuk menengah, level diturunkan ke pemula.")
+    elif payload.skill_level == "ahli" and capacity == "pemula":
+        difficulty = "menengah"
+        applied_constraints.append("Gate: Kapasitas fisik rendah, ahli dibantu ke menengah.")
+
+    bmr = (10 * payload.weight) + (6.25 * payload.height) - (5 * payload.age)
+    bmr += 5 if payload.gender == "pria" else -161
+
+    activity_multiplier = {"rendah": 1.375, "sedang": 1.55, "tinggi": 1.725}[payload.intensity]
+    tdee = round(bmr * activity_multiplier)
+
+    effective_goal = payload.goal
+    if bmi < 18.5 and payload.goal == "menurunkan_berat_badan":
+        effective_goal = "menjaga_kebugaran"
+        applied_constraints.append("Goal override: berat badan kurang tidak diperbolehkan menurunkan berat badan.")
+
+    if effective_goal == "menurunkan_berat_badan":
+        target_kcal = tdee - 500
+    elif effective_goal in {"menaikkan_berat_badan", "membentuk_otot"}:
+        target_kcal = tdee + 300
+    else:
+        target_kcal = tdee
+
+    floor = 1500 if payload.gender == "pria" else 1200
+    if target_kcal < floor:
+        target_kcal = floor
+        applied_constraints.append(f"Calorie floor: target dinaikkan ke batas aman {floor} kkal.")
+
+    macro_ratios = {
+        "menurunkan_berat_badan": {"protein": 0.35, "carbs": 0.40, "fat": 0.25},
+        "menaikkan_berat_badan": {"protein": 0.30, "carbs": 0.45, "fat": 0.25},
+        "menjaga_kebugaran": {"protein": 0.25, "carbs": 0.50, "fat": 0.25},
+        "membentuk_otot": {"protein": 0.30, "carbs": 0.45, "fat": 0.25},
+    }[effective_goal]
+
+    difficulty_map = {
+        "pemula": DifficultyLevelEnum.level_1,
+        "menengah": DifficultyLevelEnum.level_2,
+        "ahli": DifficultyLevelEnum.level_3,
+    }
+
+    return {
+        "goal": effective_goal,
+        "fcs_score": fcs_score,
+        "difficulty_level": difficulty_map[difficulty],
+        "bmr": round(bmr),
+        "tdee": tdee,
+        "target_daily_kcal": round(target_kcal),
+        "macros_json": {
+            "protein_g": round(target_kcal * macro_ratios["protein"] / 4),
+            "carbs_g": round(target_kcal * macro_ratios["carbs"] / 4),
+            "fat_g": round(target_kcal * macro_ratios["fat"] / 9),
+        },
+        "difficulty_gate_applied": any(item.startswith("Gate:") for item in applied_constraints),
+        "applied_constraints": applied_constraints,
+    }
+
+
+def _exercise_targets(goal: str, difficulty_level: DifficultyLevelEnum) -> list[dict]:
+    difficulty_values = {
+        DifficultyLevelEnum.level_1: {"sets": 3, "reps": 10, "plank_seconds": 25, "rest": 60},
+        DifficultyLevelEnum.level_2: {"sets": 3, "reps": 15, "plank_seconds": 40, "rest": 45},
+        DifficultyLevelEnum.level_3: {"sets": 4, "reps": 15, "plank_seconds": 60, "rest": 30},
+    }
+    values = difficulty_values[difficulty_level].copy()
+
+    if goal == "menurunkan_berat_badan":
+        values["reps"] += 3
+        values["rest"] = max(25, values["rest"] - 10)
+    elif goal == "menaikkan_berat_badan":
+        values["rest"] += 15
+    elif goal == "membentuk_otot":
+        values["sets"] += 1
+        values["rest"] += 15
+
+    return [
+        {
+            "name": "Push-Up",
+            "exercise": "push_up",
+            "sets": values["sets"],
+            "reps": values["reps"],
+            "target_duration_seconds": None,
+            "rest_seconds": values["rest"],
+        },
+        {
+            "name": "Sit-Up",
+            "exercise": "sit_up",
+            "sets": values["sets"],
+            "reps": values["reps"],
+            "target_duration_seconds": None,
+            "rest_seconds": values["rest"],
+        },
+        {
+            "name": "Squat",
+            "exercise": "squat",
+            "sets": values["sets"],
+            "reps": values["reps"],
+            "target_duration_seconds": None,
+            "rest_seconds": values["rest"],
+        },
+        {
+            "name": "Plank",
+            "exercise": "plank",
+            "sets": values["sets"],
+            "reps": None,
+            "target_duration_seconds": values["plank_seconds"],
+            "rest_seconds": values["rest"],
+        },
+    ]
+
+
+def _exercise_targets_for_day(
+    goal: str,
+    intensity: str,
+    difficulty_level: DifficultyLevelEnum,
+    active_day_index: int,
+) -> list[dict]:
+    exercises = _exercise_targets(goal, difficulty_level)
+    by_key = {exercise["exercise"]: exercise for exercise in exercises}
+
+    if intensity != "rendah":
+        return exercises
+
+    rotations = {
+        "menjaga_kebugaran": [
+            ["push_up", "squat", "plank"],
+            ["sit_up", "squat", "plank"],
+            ["push_up", "sit_up", "squat"],
+        ],
+        "menurunkan_berat_badan": [
+            ["push_up", "squat", "plank"],
+            ["sit_up", "squat", "plank"],
+            ["push_up", "sit_up", "squat"],
+        ],
+        "menaikkan_berat_badan": [
+            ["push_up", "squat", "plank"],
+            ["push_up", "sit_up", "squat"],
+            ["push_up", "squat", "plank"],
+        ],
+        "membentuk_otot": [
+            ["push_up", "squat", "plank"],
+            ["push_up", "sit_up", "squat"],
+            ["push_up", "squat", "plank"],
+        ],
+    }
+    day_rotation = rotations.get(goal, rotations["menjaga_kebugaran"])
+    selected_keys = day_rotation[active_day_index % len(day_rotation)]
+    return [by_key[key] for key in selected_keys]
 
 
 @router.post("/", response_model=User)
@@ -317,6 +538,157 @@ def read_user_fitness_profile_me(
     if not profile:
         raise HTTPException(status_code=404, detail="Fitness profile not found")
     return profile
+
+
+@router.post("/me/fitness-profile", response_model=UserFitnessProfile)
+def submit_user_fitness_profile_me(
+    payload: OnboardingSubmit,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    _validate_training_days(payload.intensity, payload.selected_days)
+    calculated = _calculate_onboarding(payload)
+
+    profile = session.exec(
+        select(UserFitnessProfile).where(UserFitnessProfile.user_id == current_user.id)
+    ).first()
+
+    if profile:
+        profile.goal = GoalEnum(calculated["goal"])
+        profile.age = payload.age
+        profile.gender = GenderEnum(payload.gender)
+        profile.height = payload.height
+        profile.weight = payload.weight
+        profile.skillLevel = SkillLevelEnum(payload.skill_level)
+        profile.intensity = IntensityEnum(payload.intensity)
+        profile.fcsScoreRaw = calculated["fcs_score"]
+        profile.difficultyLevel = calculated["difficulty_level"]
+        profile.bmr = calculated["bmr"]
+        profile.tdee = calculated["tdee"]
+        profile.target_daily_kcal = calculated["target_daily_kcal"]
+        profile.macros_json = calculated["macros_json"]
+        profile.difficulty_gate_applied = calculated["difficulty_gate_applied"]
+        profile.updatedAt = datetime.now(timezone.utc)
+    else:
+        profile = UserFitnessProfile(
+            user_id=current_user.id,
+            goal=GoalEnum(calculated["goal"]),
+            age=payload.age,
+            gender=GenderEnum(payload.gender),
+            height=payload.height,
+            weight=payload.weight,
+            skillLevel=SkillLevelEnum(payload.skill_level),
+            intensity=IntensityEnum(payload.intensity),
+            equipment=[],
+            fcsScoreRaw=calculated["fcs_score"],
+            difficultyLevel=calculated["difficulty_level"],
+            bmr=calculated["bmr"],
+            tdee=calculated["tdee"],
+            target_daily_kcal=calculated["target_daily_kcal"],
+            macros_json=calculated["macros_json"],
+            difficulty_gate_applied=calculated["difficulty_gate_applied"],
+        )
+
+    session.add(profile)
+    session.flush()
+
+    active_plans = session.exec(
+        select(ExercisePlan).where(
+            ExercisePlan.user_id == current_user.id,
+            ExercisePlan.is_active == True,  # noqa: E712
+        )
+    ).all()
+    for plan in active_plans:
+        plan.is_active = False
+        plan.updatedAt = datetime.now(timezone.utc)
+        session.add(plan)
+
+    new_plan = ExercisePlan(
+        user_id=current_user.id,
+        fitness_profile_id=profile.id,
+        goal=GoalEnum(calculated["goal"]),
+        days_per_week=len(payload.selected_days),
+        start_date=date.today(),
+        difficulty_level=calculated["difficulty_level"],
+        applied_constraints=calculated["applied_constraints"],
+    )
+    session.add(new_plan)
+    session.flush()
+
+    selected_day_indexes = {DAY_INDEX[day] for day in payload.selected_days}
+    for day_index in range(7):
+        session.add(
+            PlanDay(
+                plan_id=new_plan.id,
+                day_of_week=day_index,
+                is_rest_day=day_index not in selected_day_indexes,
+            )
+        )
+
+    session.commit()
+    session.refresh(profile)
+    return profile
+
+
+@router.get("/me/exercise-plan")
+def read_active_exercise_plan_me(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    plan = session.exec(
+        select(ExercisePlan).where(
+            ExercisePlan.user_id == current_user.id,
+            ExercisePlan.is_active == True,  # noqa: E712
+        )
+    ).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Active exercise plan not found")
+
+    profile = session.get(UserFitnessProfile, plan.fitness_profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Fitness profile not found")
+
+    days = session.exec(
+        select(PlanDay)
+        .where(PlanDay.plan_id == plan.id)
+        .order_by(PlanDay.day_of_week)
+    ).all()
+
+    response_days = []
+    active_day_index = 0
+    for day in days:
+        exercises = []
+        if not day.is_rest_day:
+            exercises = _exercise_targets_for_day(
+                plan.goal.value,
+                profile.intensity.value,
+                plan.difficulty_level,
+                active_day_index,
+            )
+            active_day_index += 1
+
+        response_days.append(
+            {
+                "day_of_week": day.day_of_week,
+                "is_rest_day": day.is_rest_day,
+                "exercises": exercises,
+            }
+        )
+
+    return {
+        "id": plan.id,
+        "goal": plan.goal.value,
+        "days_per_week": plan.days_per_week,
+        "difficulty_level": plan.difficulty_level.value,
+        "start_date": plan.start_date.isoformat(),
+        "nutrition": {
+            "bmr": profile.bmr,
+            "tdee": profile.tdee,
+            "target_daily_kcal": profile.target_daily_kcal,
+            "macros": profile.macros_json,
+        },
+        "days": response_days,
+    }
 
 
 @router.get("/", response_model=List[User])

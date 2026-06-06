@@ -30,21 +30,33 @@ class GoalEnum(str, Enum):
     weight_loss = "weight_loss"
     muscle_gain = "muscle_gain"
     maintain = "maintain"
+    menurunkan_berat_badan = "menurunkan_berat_badan"
+    menaikkan_berat_badan = "menaikkan_berat_badan"
+    menjaga_kebugaran = "menjaga_kebugaran"
+    membentuk_otot = "membentuk_otot"
 
 class GenderEnum(str, Enum):
     male = "male"
     female = "female"
+    pria = "pria"
+    wanita = "wanita"
 
 
 class SkillLevelEnum(str, Enum):
     beginner = "beginner"
     intermediate = "intermediate"
     advanced = "advanced"
+    pemula = "pemula"
+    menengah = "menengah"
+    ahli = "ahli"
 
 class IntensityEnum(str, Enum):
     low = "low"
     medium = "medium"
     high = "high"
+    rendah = "rendah"
+    sedang = "sedang"
+    tinggi = "tinggi"
 
 class DifficultyLevelEnum(str, Enum):
     level_1 = "level_1"

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from models import ExerciseCategory, ExerciseDifficulty
 
@@ -21,6 +21,60 @@ class UserUpdate(BaseModel):
     username: str | None = None
     email: str | None = None
     password: str | None = None
+
+class OnboardingSubmit(BaseModel):
+    goal: str
+    gender: str
+    age: int = Field(ge=15)
+    height: float = Field(gt=0)
+    weight: float = Field(gt=0)
+    skill_level: str
+    intensity: str
+    selected_days: List[str]
+
+    @field_validator("goal")
+    @classmethod
+    def validate_goal(cls, value: str) -> str:
+        valid = {
+            "menurunkan_berat_badan",
+            "menaikkan_berat_badan",
+            "menjaga_kebugaran",
+            "membentuk_otot",
+        }
+        if value not in valid:
+            raise ValueError("Invalid goal")
+        return value
+
+    @field_validator("gender")
+    @classmethod
+    def validate_gender(cls, value: str) -> str:
+        if value not in {"pria", "wanita"}:
+            raise ValueError("Invalid gender")
+        return value
+
+    @field_validator("skill_level")
+    @classmethod
+    def validate_skill_level(cls, value: str) -> str:
+        if value not in {"pemula", "menengah", "ahli"}:
+            raise ValueError("Invalid skill level")
+        return value
+
+    @field_validator("intensity")
+    @classmethod
+    def validate_intensity(cls, value: str) -> str:
+        if value not in {"rendah", "sedang", "tinggi"}:
+            raise ValueError("Invalid intensity")
+        return value
+
+    @field_validator("selected_days")
+    @classmethod
+    def validate_selected_days(cls, value: List[str]) -> List[str]:
+        valid = {"senin", "selasa", "rabu", "kamis", "jumat", "sabtu", "minggu"}
+        if len(set(value)) != len(value):
+            raise ValueError("Selected days must be unique")
+        if any(day not in valid for day in value):
+            raise ValueError("Invalid selected day")
+        return value
 
 class ExerciseCreate(BaseModel):
     name: str
