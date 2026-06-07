@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
 from models import (
+    DailyLog,
     DifficultyLevelEnum,
     ExercisePlan,
     GenderEnum,
@@ -17,6 +18,7 @@ from models import (
     User,
     UserFitnessProfile,
     UserStats,
+    WorkoutSession,
 )
 from database import get_session
 from schemas import (
@@ -29,6 +31,7 @@ from schemas import (
     OTPVerifyRequest,
     PasswordResetRequest,
     ChangePasswordRequest,
+    WorkoutLogRequest,
 )
 import bcrypt
 import os
@@ -689,6 +692,91 @@ def read_active_exercise_plan_me(
         },
         "days": response_days,
     }
+
+
+@router.get("/me/workout-history")
+def get_workout_history(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+    limit: int = 30,
+):
+    sessions = session.exec(
+        select(WorkoutSession)
+        .where(WorkoutSession.user_id == current_user.id)
+        .order_by(WorkoutSession.date.desc())
+        .limit(limit)
+    ).all()
+    return [
+        {"id": s.id, "date": s.date.isoformat(), "duration_seconds": s.duration_seconds}
+        for s in sessions
+    ]
+
+
+@router.post("/me/workout-log")
+def log_workout(
+    payload: WorkoutLogRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    today = date.today()
+
+    # Active plan (optional link)
+    plan = session.exec(
+        select(ExercisePlan).where(
+            ExercisePlan.user_id == current_user.id,
+            ExercisePlan.is_active == True,  # noqa: E712
+        )
+    ).first()
+
+    # Create session record
+    workout_session = WorkoutSession(
+        user_id=current_user.id,
+        plan_id=plan.id if plan else None,
+        date=today,
+        duration_seconds=payload.duration_seconds,
+    )
+    session.add(workout_session)
+
+    # Update UserStats
+    stats = session.exec(select(UserStats).where(UserStats.user_id == current_user.id)).first()
+    if not stats:
+        stats = UserStats(user_id=current_user.id)
+        session.add(stats)
+
+    for ex in payload.exercises:
+        name = ex.exercise_name.lower().replace('-', ' ')
+        total_reps = ex.sets_completed * ex.reps_completed
+        if 'push' in name:
+            stats.totalPushUps += total_reps
+        elif 'sit' in name:
+            stats.totalSitUps += total_reps
+
+    # Streak logic
+    yesterday = today - timedelta(days=1)
+    if stats.lastActiveDate == today:
+        pass  # Already logged today
+    elif stats.lastActiveDate == yesterday:
+        stats.currentStreak += 1
+    else:
+        stats.currentStreak = 1
+
+    if stats.currentStreak > stats.longestStreak:
+        stats.longestStreak = stats.currentStreak
+    stats.lastActiveDate = today
+    stats.updatedAt = datetime.now(timezone.utc)
+
+    # DailyLog upsert
+    daily = session.exec(
+        select(DailyLog).where(
+            DailyLog.user_id == current_user.id,
+            DailyLog.date == today,
+        )
+    ).first()
+    if not daily:
+        session.add(DailyLog(user_id=current_user.id, date=today, day_type="workout_completed"))
+
+    session.commit()
+    return {"message": "Workout logged", "current_streak": stats.currentStreak}
 
 
 @router.get("/", response_model=List[User])

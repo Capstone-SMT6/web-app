@@ -128,3 +128,12 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class WorkoutLogExercise(BaseModel):
+    exercise_name: str
+    sets_completed: int
+    reps_completed: int
+
+
+class WorkoutLogRequest(BaseModel):
+    duration_seconds: int = 0
+    exercises: List[WorkoutLogExercise]
