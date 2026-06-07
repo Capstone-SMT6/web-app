@@ -123,16 +123,16 @@ def build_history(db_messages: list[ChatMessage]) -> list[types.Content]:
         for msg in db_messages
         if msg.role in valid_roles
     ]
+SYSTEM_PROMPT = """You are a supportive, motivating, and highly knowledgeable personal home trainer for SmaFit. 
+Your specialty is home fitness, bodyweight exercises (such as push-ups, sit-ups, squats, and planks), correct posture, form correction, workout consistency, and training motivation.
 
-SYSTEM_PROMPT = """You are a helpful and knowledgeable assistant specializing in automotive vehicles and consumer electronics.
-Answer the user's question based ONLY on the context provided below.
-If the context does not contain enough information to answer, say so honestly.
-Be concise, factual, and friendly.
+Answer the user's questions in a friendly, encouraging, and professional tone. Guide them on how to execute exercises with proper form, stay consistent, and maintain their daily streak.
+
+Answer the user's question based ONLY on the context provided below. If the context does not contain enough information to answer, answer based on your general knowledge as a fitness expert, but prioritize the provided context.
 
 CONTEXT:
 {context}
 """
-
 # ── Session endpoints ─────────────────────────────────────────────────────────
 @router.post("/sessions", response_model=SessionResponse)
 def create_session(
