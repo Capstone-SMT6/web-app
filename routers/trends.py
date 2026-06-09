@@ -26,18 +26,15 @@ def get_trending(limit: int = 5):
         if not doc:
             raise HTTPException(status_code=404, detail="No trend data found")
 
-        cutoff = datetime.now() - timedelta(days=90)
         totals: dict[str, int] = {}
 
         for article, entries in doc.get("data", {}).items():
-            total = sum(
-                e["views"] for e in entries
-                if datetime.strptime(e["date"], "%Y-%m-%d") >= cutoff
-            )
-            if total > 0:
-                totals[article] = total
+            if entries:
+                totals[article] = entries[-1]["views"]
 
         ranked = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+        desc_map = doc.get("descriptions", {})
 
         return {
             "scraped_at": doc.get("scraped_at"),
@@ -46,6 +43,7 @@ def get_trending(limit: int = 5):
                     "rank": i + 1,
                     "article": name.replace("_", " "),
                     "views_90d": views,
+                    "description": desc_map.get(name, ""),
                 }
                 for i, (name, views) in enumerate(ranked)
             ],
