@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, date as datetime_date
 from enum import Enum
 from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import UniqueConstraint, JSON, Text
@@ -301,6 +301,57 @@ class DailyLog(SQLModel, table=True):
     date: date
     day_type: str = Field()
     createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+
+# ---------------------------------------------------------------------------
+# Section 4: Nutrition Tracking
+# ---------------------------------------------------------------------------
+
+class FoodItem(SQLModel, table=True):
+    __tablename__ = "fooditem"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    name: str = Field(max_length=255, index=True)
+    category: str = Field(max_length=50)  # "makanan" | "minuman" | "snack"
+    calories_per_serving: float = Field(default=0.0)
+    protein_per_serving: float = Field(default=0.0)
+    carbs_per_serving: float = Field(default=0.0)
+    fat_per_serving: float = Field(default=0.0)
+    serving_unit: str = Field(max_length=50, default="porsi")
+    serving_size_g: Optional[float] = Field(default=None)
+    imageUrl: Optional[str] = Field(default=None, sa_column_kwargs={"name": "image_url"})
+    isActive: bool = Field(default=True, sa_column_kwargs={"name": "is_active"})
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
+
+class FoodLog(SQLModel, table=True):
+    __tablename__ = "foodlog"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="user.id", index=True)
+    date: datetime_date = Field(index=True)
+    meal_type: str = Field(max_length=50)  # "breakfast" | "lunch" | "dinner" | "snack"
+    food_item_id: str = Field(foreign_key="fooditem.id", index=True)
+    quantity: float = Field(default=1.0)
+    calories_kcal: float = Field(default=0.0)
+    protein_g: float = Field(default=0.0)
+    carbs_g: float = Field(default=0.0)
+    fat_g: float = Field(default=0.0)
+    notes: Optional[str] = Field(default=None, sa_column=Column(Text))
+    createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+
+class NutritionSummary(SQLModel, table=True):
+    __tablename__ = "nutritionsummary"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_nutritionsummary_user_date"),)
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="user.id", index=True)
+    date: datetime_date = Field(index=True)
+    total_kcal: float = Field(default=0.0)
+    total_protein_g: float = Field(default=0.0)
+    total_carbs_g: float = Field(default=0.0)
+    total_fat_g: float = Field(default=0.0)
+    entry_count: int = Field(default=0)
+    updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 
 
 # ---------------------------------------------------------------------------

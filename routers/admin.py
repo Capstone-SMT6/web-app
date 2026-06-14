@@ -8,8 +8,8 @@ from datetime import timedelta, timezone
 from collections import defaultdict
 from routers.users import verify_password, create_access_token, SECRET_KEY, ALGORITHM
 from database import get_session
-from models import User, UserStats, WorkoutSession, ChatSession, Exercise
-from schemas import ExerciseCreate, ExerciseUpdate
+from models import User, UserStats, WorkoutSession, ChatSession, Exercise, FoodItem
+from schemas import ExerciseCreate, ExerciseUpdate, FoodItemCreate, FoodItemUpdate
 
 class AdminLoginRequest(BaseModel):
     email: str
@@ -272,3 +272,74 @@ async def admin_api_upload_exercise_video(
     from cloudinary_storage import upload_video_to_cloudinary
     url = await upload_video_to_cloudinary(file, folder="smafit/exercises")
     return {"url": url}
+
+# ── Foods API ─────────────────────────────────────────────────────────────
+
+@router.get("/api/foods")
+def admin_api_get_foods(
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    foods = session.exec(select(FoodItem)).all()
+    return foods
+
+@router.post("/api/foods")
+def admin_api_create_food(
+    food_in: FoodItemCreate,
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    food = FoodItem(**food_in.model_dump())
+    session.add(food)
+    session.commit()
+    session.refresh(food)
+    return food
+
+@router.put("/api/foods/{food_id}")
+def admin_api_update_food(
+    food_id: str,
+    food_in: FoodItemUpdate,
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    food = session.get(FoodItem, food_id)
+    if not food:
+        raise HTTPException(status_code=404, detail="Food item not found")
+        
+    update_data = food_in.model_dump(exclude_unset=True)
+    
+    for key, value in update_data.items():
+        setattr(food, key, value)
+        
+    food.updatedAt = datetime.now(timezone.utc)
+    session.add(food)
+    session.commit()
+    session.refresh(food)
+    return food
+
+@router.delete("/api/foods/{food_id}")
+def admin_api_delete_food(
+    food_id: str,
+    admin: User = Depends(get_admin_user_api),
+    session: Session = Depends(get_session)
+):
+    food = session.get(FoodItem, food_id)
+    if not food:
+        raise HTTPException(status_code=404, detail="Food item not found")
+        
+    # Soft delete
+    food.isActive = False
+    food.updatedAt = datetime.now(timezone.utc)
+    session.add(food)
+    session.commit()
+    return {"message": "Food item deleted successfully"}
+
+@router.post("/api/foods/upload/image")
+async def admin_api_upload_food_image(
+    file: UploadFile = File(...),
+    admin: User = Depends(get_admin_user_api)
+):
+    from cloudinary_storage import upload_image_to_cloudinary
+    url = await upload_image_to_cloudinary(file, folder="smafit/foods")
+    return {"url": url}
+

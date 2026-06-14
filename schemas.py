@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
+from datetime import date as datetime_date
 from models import ExerciseCategory, ExerciseDifficulty
 
 class UserCreate(BaseModel):
@@ -137,3 +138,44 @@ class WorkoutLogExercise(BaseModel):
 class WorkoutLogRequest(BaseModel):
     duration_seconds: int = 0
     exercises: List[WorkoutLogExercise]
+
+
+# Section 4: Nutrition Tracking Schemas
+
+class FoodItemCreate(BaseModel):
+    name: str
+    category: str  # "makanan" | "minuman" | "snack"
+    calories_per_serving: float
+    protein_per_serving: float
+    carbs_per_serving: float
+    fat_per_serving: float
+    serving_unit: str
+    serving_size_g: Optional[float] = None
+    imageUrl: Optional[str] = None
+    isActive: bool = True
+
+class FoodItemUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    calories_per_serving: Optional[float] = None
+    protein_per_serving: Optional[float] = None
+    carbs_per_serving: Optional[float] = None
+    fat_per_serving: Optional[float] = None
+    serving_unit: Optional[str] = None
+    serving_size_g: Optional[float] = None
+    imageUrl: Optional[str] = None
+    isActive: Optional[bool] = None
+
+class FoodLogCreate(BaseModel):
+    food_item_id: str
+    quantity: float
+    meal_type: str  # "breakfast" | "lunch" | "dinner" | "snack"
+    notes: Optional[str] = None
+    date: Optional[datetime_date] = None
+
+    @field_validator("meal_type")
+    @classmethod
+    def validate_meal_type(cls, value: str) -> str:
+        if value not in {"breakfast", "lunch", "dinner", "snack"}:
+            raise ValueError("Invalid meal type")
+        return value
