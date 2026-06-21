@@ -1,4 +1,14 @@
+---
+title: SmaFit-FastApi
+emoji: 🏋️
+colorFrom: green
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
 # Capstone Backend API (FastAPI)
+
 
 This is the Python-based backend that handles authentication (JWT), PostgreSQL database operations (SQLModel/Alembic), API requests, and the RAG Chatbot powered by ChromaDB & Gemini.
 
