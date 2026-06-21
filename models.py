@@ -5,6 +5,7 @@ from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import UniqueConstraint, JSON, Text
 from sqlalchemy.sql import func
 import uuid
+from pgvector.sqlalchemy import Vector
 
 
 # ---------------------------------------------------------------------------
@@ -377,3 +378,14 @@ class ChatMessage(SQLModel, table=True):
     text: str = Field(sa_column=Column(Text))
     sources: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
+
+
+class RAGKnowledge(SQLModel, table=True):
+    __tablename__ = "ragknowledge"
+
+    id: str = Field(primary_key=True)
+    content: str = Field(sa_column=Column(Text))
+    embedding: List[float] = Field(sa_column=Column(Vector(3072)))
+    source: str = Field()
+    category: str = Field()
+    filename: str = Field()

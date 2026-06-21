@@ -10,16 +10,18 @@ Run this script once (and re-run whenever the RAG data changes):
 import os
 import glob
 import time
-import chromadb
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from sqlmodel import Session
+from sqlalchemy import text
+from database import engine
+from models import RAGKnowledge
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 RAG_DATA_DIR    = os.path.join(os.path.dirname(__file__), "data", "RAG")
-CHROMA_PATH     = os.path.join(os.path.dirname(__file__), "chroma_db")
 COLLECTION_NAME = "rag_knowledge"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 
@@ -29,18 +31,6 @@ if not GOOGLE_API_KEY:
     raise EnvironmentError("GOOGLE_API_KEY is not set in your .env file.")
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
-
-# ── ChromaDB (persistent local storage) ──────────────────────────────────────
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-
-try:
-    chroma_client.delete_collection(COLLECTION_NAME)
-    print(f"🗑️  Deleted existing collection '{COLLECTION_NAME}'")
-except Exception:
-    pass
-
-collection = chroma_client.create_collection(COLLECTION_NAME)
-print(f"✅ Created collection '{COLLECTION_NAME}'")
 
 
 def embed_text(text: str, retries=5) -> list[float]:
@@ -94,27 +84,31 @@ def load_markdown_files() -> list[dict]:
 
 def ingest():
     docs = load_markdown_files()
-    print(f"\n📂 Found {len(docs)} markdown files — embedding…\n")
+    print(f"\nFound {len(docs)} markdown files - embedding...\n")
 
-    ids, embeddings, contents, metas = [], [], [], []
+    with Session(engine) as session:
+        # Clear existing knowledge base
+        session.execute(text("TRUNCATE TABLE ragknowledge CASCADE"))
+        session.commit()
+        print("Cleared existing database collection")
 
-    for i, doc in enumerate(docs, 1):
-        print(f"  [{i:2}/{len(docs)}] {doc['metadata']['source']}")
-        embedding = embed_text(doc["content"])
+        for i, doc in enumerate(docs, 1):
+            print(f"  [{i:2}/{len(docs)}] {doc['metadata']['source']}")
+            embedding = embed_text(doc["content"])
 
-        ids.append(doc["id"])
-        embeddings.append(embedding)
-        contents.append(doc["content"])
-        metas.append(doc["metadata"])
+            db_item = RAGKnowledge(
+                id=doc["id"],
+                content=doc["content"],
+                embedding=embedding,
+                source=doc["metadata"]["source"],
+                category=doc["metadata"]["category"],
+                filename=doc["metadata"]["filename"]
+            )
+            session.add(db_item)
+        
+        session.commit()
 
-    collection.add(
-        ids=ids,
-        embeddings=embeddings,
-        documents=contents,
-        metadatas=metas,
-    )
-
-    print(f"\n🎉 Done! {len(docs)} documents indexed into ChromaDB at '{CHROMA_PATH}'")
+    print(f"\nDone! {len(docs)} documents indexed into Neon pgvector")
 
 
 if __name__ == "__main__":

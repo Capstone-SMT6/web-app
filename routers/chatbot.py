@@ -12,7 +12,6 @@ All endpoints require a valid JWT (Bearer token).
 
 import os
 import json as json_lib
-import chromadb
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -25,14 +24,12 @@ from sqlmodel import Session, select
 from dotenv import load_dotenv
 
 from database import get_session
-from models import User, ChatSession, ChatMessage
+from models import User, ChatSession, ChatMessage, RAGKnowledge
 from routers.users import get_current_user
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-CHROMA_PATH     = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
-COLLECTION_NAME = "rag_knowledge"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 CHAT_MODEL      = "gemini-2.5-flash-lite"
 TOP_K           = 5
@@ -42,17 +39,6 @@ if not GOOGLE_API_KEY:
     raise EnvironmentError("GOOGLE_API_KEY is not set in your .env file.")
 
 genai_client = genai.Client(api_key=GOOGLE_API_KEY)
-
-# ── ChromaDB (lazy-loaded) ────────────────────────────────────────────────────
-_chroma_client = None
-_collection    = None
-
-def get_collection():
-    global _chroma_client, _collection
-    if _collection is None:
-        _chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-        _collection = _chroma_client.get_collection(COLLECTION_NAME)
-    return _collection
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 class ChatMessageSchema(BaseModel):
@@ -100,18 +86,17 @@ def embed_query(text: str) -> list[float]:
     )
     return response.embeddings[0].values
 
-def retrieve(query: str) -> tuple[str, list[str]]:
+def retrieve(query: str, db: Session) -> tuple[str, list[str]]:
     """Return (context_block, list_of_source_labels)."""
-    collection = get_collection()
     query_embedding = embed_query(query)
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=TOP_K,
-        include=["documents", "metadatas"],
+    stmt = (
+        select(RAGKnowledge)
+        .order_by(RAGKnowledge.embedding.cosine_distance(query_embedding))
+        .limit(TOP_K)
     )
-    docs    = results["documents"][0]
-    metas   = results["metadatas"][0]
-    sources = [m["source"] for m in metas]
+    results = db.exec(stmt).all()
+    docs    = [item.content for item in results]
+    sources = [item.source for item in results]
     context = "\n\n---\n\n".join(docs)
     return context, sources
 
@@ -123,7 +108,7 @@ def build_history(db_messages: list[ChatMessage]) -> list[types.Content]:
         for msg in db_messages
         if msg.role in valid_roles
     ]
-SYSTEM_PROMPT = """You are a supportive, motivating, and highly knowledgeable personal home trainer for SmaFit. 
+SYSTEM_PROMPT = """You are a supportive, motivating, and highly knowledgeable personal home trainer for SmaCoFit. 
 Your specialty is home fitness, bodyweight exercises (such as push-ups, sit-ups, squats, and planks), correct posture, form correction, workout consistency, and training motivation.
 
 Answer the user's questions in a friendly, encouraging, and professional tone. Guide them on how to execute exercises with proper form, stay consistent, and maintain their daily streak.
@@ -217,7 +202,7 @@ async def chat(
     if not chat_session or chat_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
     try:
-        context, sources = retrieve(req.message)
+        context, sources = retrieve(req.message, db)
         db_messages = db.exec(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id)
@@ -281,7 +266,7 @@ async def chat_stream(
     if not chat_session or chat_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
     try:
-        context, sources = retrieve(req.message)
+        context, sources = retrieve(req.message, db)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     db_messages = db.exec(
