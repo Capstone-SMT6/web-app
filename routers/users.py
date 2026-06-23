@@ -32,6 +32,7 @@ from schemas import (
     PasswordResetRequest,
     ChangePasswordRequest,
     WorkoutLogRequest,
+    DashboardReportResponse,
 )
 import bcrypt
 import os
@@ -876,3 +877,84 @@ def delete_user(
     session.add(db_user)
     session.commit()
     return {"message": "User deleted successfully"}
+
+
+@router.get("/me/dashboard-report", response_model=DashboardReportResponse)
+def get_dashboard_report(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    stats = session.exec(select(UserStats).where(UserStats.user_id == current_user.id)).first()
+    profile = session.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == current_user.id)).first()
+    
+    # 1. Weekly activity (last 7 days)
+    today = date.today()
+    weekly_activity = []
+    max_duration = 3600 # 1 hour = 1.0 (100%)
+    from datetime import timedelta
+    for i in range(7):
+        d = today - timedelta(days=6 - i)
+        w_sessions = session.exec(select(WorkoutSession).where(WorkoutSession.user_id == current_user.id, WorkoutSession.date == d)).all()
+        total_seconds = sum(s.duration_seconds for s in w_sessions)
+        activity_val = min(total_seconds / max_duration, 1.0)
+        weekly_activity.append(round(activity_val, 2))
+
+    # 2. Goals Progress
+    consistency = min((stats.currentStreak if stats else 0) / 30.0, 1.0) if stats else 0.0
+    strength = min(((stats.totalPushUps if stats else 0) + (stats.totalSitUps if stats else 0)) / 1000.0, 1.0) if stats else 0.0
+    
+    goals_progress = {
+        "Konsistensi": round(consistency, 2),
+        "Kekuatan": round(strength, 2)
+    }
+
+    # 3. AI Insights
+    import os
+    import json as json_lib
+    from google import genai
+    from google.genai import types
+
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    wawasan_ai = "Tetap semangat berlatih! Lanjutkan konsistensi Anda."
+    fokus_hari_ini = ["Tingkatkan repetisi", "Jaga postur"]
+
+    if GOOGLE_API_KEY and profile and stats:
+        try:
+            genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+            prompt = f"""
+            Kamu adalah AI Personal Trainer SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
+            - Streak Latihan Saat Ini: {stats.currentStreak} hari
+            - Total Push Ups: {stats.totalPushUps}
+            - Total Sit Ups: {stats.totalSitUps}
+            - Goal Utama User: {profile.goal.value}
+            
+            Berikan feedback yang spesifik, memotivasi, dan tunjukkan pencapaian atau hal yang perlu ditingkatkan secara ringkas.
+            
+            Berikan output HANYA dalam format JSON valid dengan dua key:
+            "wawasan_ai" : "string kesimpulan ringkas (1-2 kalimat)",
+            "fokus_hari_ini" : ["array of string", "max 2 poin singkat"]
+            """
+            
+            response = genai_client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                )
+            )
+            ai_data = json_lib.loads(response.text)
+            if "wawasan_ai" in ai_data:
+                wawasan_ai = ai_data["wawasan_ai"]
+            if "fokus_hari_ini" in ai_data:
+                fokus_hari_ini = ai_data["fokus_hari_ini"]
+        except Exception as e:
+            print("Error generating AI insight:", e)
+    
+    return {
+        "insights": {
+            "wawasan_ai": wawasan_ai,
+            "fokus_hari_ini": fokus_hari_ini
+        },
+        "weekly_activity": weekly_activity,
+        "goals_progress": goals_progress
+    }
