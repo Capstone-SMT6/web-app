@@ -127,43 +127,38 @@ _ALLOWED_DIFFICULTIES = {
 
 _DAILY_FOCUS = {
     GoalEnum.weight_loss: [
-        ["chest", "triceps"],
-        ["back", "biceps"],
-        ["legs", "core"],
-        ["full_body"],
-        ["cardio", "core"],
-        ["legs", "shoulders"],
+        ["kardio", "cardio", "perut", "inti", "core", "full body"], # Cardio & Core Focus
+        ["dada", "chest", "bahu", "shoulders", "triceps", "punggung", "kardio", "cardio"], # Upper & Cardio
+        ["kaki", "legs", "bokong", "glutes", "kardio", "cardio"], # Lower & Cardio
+        ["full_body", "full body", "chest", "dada", "kaki", "legs"], # Full Body HIIT
     ],
     GoalEnum.muscle_gain: [
-        ["chest", "triceps"],
-        ["back", "biceps"],
-        ["legs"],
-        ["shoulders", "arms"],
-        ["chest", "back"],
-        ["legs", "core"],
+        ["dada", "chest", "bahu", "shoulders", "triceps", "punggung", "back", "biceps", "lengan"], # Upper Body
+        ["kaki", "legs", "bokong", "glutes", "perut", "inti", "core"], # Lower Body & Core
+        ["full_body", "full body", "chest", "dada", "kaki", "legs"], # Full Body Power
     ],
     GoalEnum.maintain: [
-        ["chest", "core"],
-        ["back", "legs"],
-        ["full_body"],
-        ["shoulders", "arms"],
-        ["legs", "core"],
-        ["full_body"],
+        ["dada", "chest", "bahu", "shoulders", "punggung", "perut", "inti", "core"], # Upper & Core
+        ["kaki", "legs", "bokong", "glutes", "kardio", "cardio"], # Lower & Cardio
+        ["full_body", "full body"], # Full Body
     ],
 }
 
 
 def _match_exercise_focus(exercise: Exercise, focus_groups: List[str]) -> bool:
     """Check if an exercise targets any of the desired muscle groups."""
-    if "full_body" in focus_groups:
-        return True
     all_muscles = [m.lower() for m in (exercise.muscleGroups or []) + (exercise.secondaryMuscles or [])]
+    
+    # If the focus group requests full body, we can just allow exercises that are full body or major compound
+    if "full_body" in focus_groups or "full body" in focus_groups:
+        return True
+        
     return any(fg.lower() in " ".join(all_muscles) for fg in focus_groups)
 
 
 # ── Main generator ─────────────────────────────────────────────────────────
 
-def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: List[str] = None) -> ExercisePlan:
+def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: List[str] = None, applied_constraints: List[str] = None) -> ExercisePlan:
     """
     Generate a complete weekly ExercisePlan for the given profile.
     Persists ExercisePlan, PlanDay, and PlanDayExercise rows.
@@ -218,7 +213,7 @@ def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: 
         days_per_week=active_days,
         start_date=date.today(),
         difficulty_level=profile.difficultyLevel,
-        applied_constraints=profile.equipment or [],
+        applied_constraints=applied_constraints if applied_constraints is not None else (profile.equipment or []),
     )
     session.add(plan)
     session.flush()  # get plan.id
@@ -270,11 +265,11 @@ def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: 
         # Select exercises matching focus
         candidates = [e for e in eligible if _match_exercise_focus(e, focus)]
         # Fallback: if not enough candidates, use all eligible
-        if len(candidates) < 3:
+        if len(candidates) < 2:
             candidates = eligible
 
-        # Pick up to 4-5 exercises for the day (varied by intensity)
-        n_exercises = min(5 if profile.intensity in (IntensityEnum.medium, IntensityEnum.high) else 4, len(candidates))
+        # Pick up to 4-6 exercises for the day (varied by intensity)
+        n_exercises = min(6 if profile.intensity in (IntensityEnum.medium, IntensityEnum.high) else 4, len(candidates))
 
         # Rotate through candidates deterministically based on day
         start_idx = dow * 2 % max(len(candidates), 1)

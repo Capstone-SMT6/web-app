@@ -596,39 +596,8 @@ def submit_user_fitness_profile_me(
     session.add(profile)
     session.flush()
 
-    active_plans = session.exec(
-        select(ExercisePlan).where(
-            ExercisePlan.user_id == current_user.id,
-            ExercisePlan.is_active == True,  # noqa: E712
-        )
-    ).all()
-    for plan in active_plans:
-        plan.is_active = False
-        plan.updatedAt = datetime.now(timezone.utc)
-        session.add(plan)
-
-    new_plan = ExercisePlan(
-        user_id=current_user.id,
-        fitness_profile_id=profile.id,
-        goal=GoalEnum(calculated["goal"]),
-        days_per_week=len(payload.selected_days),
-        start_date=date.today(),
-        difficulty_level=calculated["difficulty_level"],
-        applied_constraints=calculated["applied_constraints"],
-    )
-    session.add(new_plan)
-    session.flush()
-
-    selected_day_indexes = {DAY_INDEX[day] for day in payload.selected_days}
-    for day_index in range(7):
-        session.add(
-            PlanDay(
-                plan_id=new_plan.id,
-                day_of_week=day_index,
-                is_rest_day=day_index not in selected_day_indexes,
-            )
-        )
-
+    from services.plan_generator import generate_plan
+    generate_plan(profile, session, payload.selected_days, applied_constraints=calculated["applied_constraints"])
     session.commit()
     session.refresh(profile)
     return profile
@@ -639,60 +608,30 @@ def read_active_exercise_plan_me(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    from services.plan_generator import get_active_plan
+    result = get_active_plan(current_user.id, session)
+    if not result:
+        raise HTTPException(status_code=404, detail="Active exercise plan not found")
+    
+    # We must also attach nutrition facts from the profile
     plan = session.exec(
         select(ExercisePlan).where(
             ExercisePlan.user_id == current_user.id,
-            ExercisePlan.is_active == True,  # noqa: E712
+            ExercisePlan.is_active == True,
         )
     ).first()
-    if not plan:
-        raise HTTPException(status_code=404, detail="Active exercise plan not found")
-
-    profile = session.get(UserFitnessProfile, plan.fitness_profile_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Fitness profile not found")
-
-    days = session.exec(
-        select(PlanDay)
-        .where(PlanDay.plan_id == plan.id)
-        .order_by(PlanDay.day_of_week)
-    ).all()
-
-    response_days = []
-    active_day_index = 0
-    for day in days:
-        exercises = []
-        if not day.is_rest_day:
-            exercises = _exercise_targets_for_day(
-                plan.goal.value,
-                profile.intensity.value,
-                plan.difficulty_level,
-                active_day_index,
-            )
-            active_day_index += 1
-
-        response_days.append(
-            {
-                "day_of_week": day.day_of_week,
-                "is_rest_day": day.is_rest_day,
-                "exercises": exercises,
+    
+    if plan:
+        profile = session.get(UserFitnessProfile, plan.fitness_profile_id)
+        if profile:
+            result["nutrition"] = {
+                "bmr": profile.bmr,
+                "tdee": profile.tdee,
+                "target_daily_kcal": profile.target_daily_kcal,
+                "macros": profile.macros_json,
             }
-        )
 
-    return {
-        "id": plan.id,
-        "goal": plan.goal.value,
-        "days_per_week": plan.days_per_week,
-        "difficulty_level": plan.difficulty_level.value,
-        "start_date": plan.start_date.isoformat(),
-        "nutrition": {
-            "bmr": profile.bmr,
-            "tdee": profile.tdee,
-            "target_daily_kcal": profile.target_daily_kcal,
-            "macros": profile.macros_json,
-        },
-        "days": response_days,
-    }
+    return result
 
 
 @router.get("/me/workout-history")
