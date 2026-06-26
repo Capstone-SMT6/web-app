@@ -1,8 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
-from routers import users, chatbot, admin, trends, nutrition
+from routers import users, chatbot, admin, trends, nutrition, workouts
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,6 +30,7 @@ app.include_router(chatbot.router)
 app.include_router(admin.router)
 app.include_router(trends.router)
 app.include_router(nutrition.router)
+app.include_router(workouts.router)
 
 
 @app.get("/")

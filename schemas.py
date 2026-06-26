@@ -179,3 +179,13 @@ class FoodLogCreate(BaseModel):
         if value not in {"breakfast", "lunch", "dinner", "snack"}:
             raise ValueError("Invalid meal type")
         return value
+
+# Section 5: AI Insights
+class InsightsModel(BaseModel):
+    wawasan_ai: str
+    fokus_hari_ini: List[str]
+
+class DashboardReportResponse(BaseModel):
+    insights: InsightsModel
+    weekly_activity: List[float]
+    goals_progress: dict[str, float]
