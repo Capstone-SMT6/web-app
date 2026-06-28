@@ -111,6 +111,7 @@ class User(SQLModel, table=True):
     googleId: Optional[str] = Field(default=None, unique=True, sa_column_kwargs={"name": "google_id"})
     photoUrl: Optional[str] = Field(default=None, sa_column_kwargs={"name": "photo_url"})
     notificationEnabled: bool = Field(default=True, sa_column_kwargs={"name": "notification_enabled"})
+    fcmToken: Optional[str] = Field(default=None, sa_column_kwargs={"name": "fcm_token"})
     deletedAt: Optional[datetime] = Field(default=None, sa_column_kwargs={"name": "deleted_at"})
     createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
     updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})

@@ -58,3 +58,4 @@ websockets==14.1
 pymongo==4.17.0
 
 resend
+firebase-admin

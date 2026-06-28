@@ -33,6 +33,7 @@ from schemas import (
     ChangePasswordRequest,
     WorkoutLogRequest,
     DashboardReportResponse,
+    FCMTokenUpdate,
 )
 import bcrypt
 import os
@@ -517,6 +518,20 @@ def read_user_me(
     current_user: User = Depends(get_current_user),
 ):
     return current_user
+
+
+@router.post("/me/fcm-token")
+def update_fcm_token(
+    payload: FCMTokenUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    current_user.fcmToken = payload.fcm_token
+    current_user.updatedAt = datetime.now(timezone.utc)
+    session.add(current_user)
+    session.commit()
+    return {"message": "FCM token updated successfully"}
+
 
 
 @router.get("/me/stats", response_model=UserStats)

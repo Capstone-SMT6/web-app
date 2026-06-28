@@ -22,6 +22,8 @@ class UserUpdate(BaseModel):
     username: str | None = None
     email: str | None = None
     password: str | None = None
+    notificationEnabled: bool | None = None
+
 
 class OnboardingSubmit(BaseModel):
     goal: str
@@ -189,3 +191,8 @@ class DashboardReportResponse(BaseModel):
     insights: InsightsModel
     weekly_activity: List[float]
     goals_progress: dict[str, float]
+
+
+class FCMTokenUpdate(BaseModel):
+    fcm_token: str
+
