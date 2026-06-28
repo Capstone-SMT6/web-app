@@ -17,14 +17,18 @@ def _get_col():
     return client["big_data_class"]["wiki_trends"]
 # END MONGO SETUP
 
+def _get_latest_doc():
+    col = _get_col()
+    doc = col.find_one({}, {"_id": 0}, sort=[("scraped_at", -1)])
+    if not doc:
+        raise HTTPException(status_code=404, detail="No trend data found")
+    return doc
+
 # GET TRENDING
 @router.get("/")
 def get_trending(limit: int = 5):
     try:
-        col = _get_col()
-        doc = col.find_one({}, {"_id": 0}, sort=[("scraped_at", -1)])
-        if not doc:
-            raise HTTPException(status_code=404, detail="No trend data found")
+        doc = _get_latest_doc()
 
         totals: dict[str, int] = {}
 
@@ -53,3 +57,13 @@ def get_trending(limit: int = 5):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 # END GET TRENDING
+
+
+@router.get("/raw")
+def get_latest_trend_document():
+    try:
+        return _get_latest_doc()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
