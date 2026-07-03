@@ -1,18 +1,16 @@
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 
 
 def send_otp_email(to_email: str, code: str, purpose: str):
     """
-    Sends an OTP code via Gmail SMTP.
+    Sends an OTP code via Resend API.
     """
-    smtp_email = os.getenv("SMTP_EMAIL")
-    smtp_password = os.getenv("SMTP_PASSWORD")
+    resend.api_key = os.getenv("RESEND_API_KEY")
+    from_email = os.getenv("RESEND_FROM_EMAIL", "SmacoFit <onboarding@resend.dev>")
 
-    if not smtp_email or not smtp_password:
-        raise Exception("SMTP_EMAIL or SMTP_PASSWORD is not set in environment variables")
+    if not resend.api_key:
+        raise Exception("RESEND_API_KEY is not set in environment variables")
 
     subject = "Verify your account" if purpose == "register" else "Reset your password"
     title_text = "Welcome to SmacoFit!" if purpose == "register" else "Reset Password Request"
@@ -33,17 +31,11 @@ def send_otp_email(to_email: str, code: str, purpose: str):
     </div>
     """
 
-    message = MIMEMultipart("alternative")
-    message["Subject"] = subject
-    message["From"] = smtp_email
-    message["To"] = to_email
-    message.attach(MIMEText(html_content, "html"))
+    params: resend.Emails.SendParams = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": subject,
+        "html": html_content,
+    }
 
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(smtp_email, smtp_password)
-            server.sendmail(smtp_email, to_email, message.as_string())
-    except Exception as e:
-        print(f"Error sending email via SMTP: {e}")
-        raise Exception("Failed to send verification email")
+    resend.Emails.send(params)
