@@ -3,7 +3,7 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Create a non-root user (Hugging Face Spaces requires this for security)
+# Create a non-root user
 RUN useradd -m -u 1000 user
 
 # Install system dependencies required for ChromaDB and building python packages
@@ -33,8 +33,7 @@ COPY --chown=user:user . .
 # Switch to the non-root user
 USER user
 
-# Hugging Face Spaces run on port 7860 by default
-EXPOSE 7860
+EXPOSE 10000
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
