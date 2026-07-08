@@ -6,6 +6,26 @@ import uuid
 def add_exercises():
     new_exercises = [
         {
+            "name": "Push Up",
+            "slug": "push-up",
+            "description": "Latihan fundamental untuk membangun kekuatan tubuh bagian atas, khususnya otot dada, bahu, dan triceps.",
+            "category": ExerciseCategory.strength,
+            "muscleGroups": ["dada", "bahu", "triceps", "chest", "shoulders"],
+            "difficulty": ExerciseDifficulty.beginner,
+            "instructions": ["Posisi tengkurap dengan tangan selebar bahu", "Turunkan badan hingga dada hampir menyentuh lantai", "Dorong kembali ke posisi awal"],
+            "isActive": True
+        },
+        {
+            "name": "Sit Up",
+            "slug": "sit-up",
+            "description": "Latihan inti (core strength) klasik untuk melatih stabilitas abdomen serta kekuatan otot perut.",
+            "category": ExerciseCategory.strength,
+            "muscleGroups": ["perut", "inti", "abs", "core"],
+            "difficulty": ExerciseDifficulty.beginner,
+            "instructions": ["Berbaring telentang dengan lutut ditekuk", "Angkat tubuh bagian atas ke arah lutut", "Turunkan kembali perlahan"],
+            "isActive": True
+        },
+        {
             "name": "Squat",
             "slug": "squat",
             "description": "Turun sampai paha sejajar lantai, lutut tidak melewati jari kaki.",
@@ -25,6 +45,7 @@ def add_exercises():
             "instructions": ["Posisi tengkurap", "Angkat badan dengan siku", "Tahan posisi lurus"],
             "isActive": True
         },
+        # Exercises below are NOT supported by pose detection — set isActive=False
         {
             "name": "Jumping Jack",
             "slug": "jumping-jack",
@@ -33,7 +54,7 @@ def add_exercises():
             "muscleGroups": ["seluruh tubuh", "kardio", "full body", "cardio"],
             "difficulty": ExerciseDifficulty.beginner,
             "instructions": ["Berdiri tegak", "Lompat dan buka kaki", "Kembali ke posisi awal"],
-            "isActive": True
+            "isActive": False
         },
         {
             "name": "High Knee",
@@ -43,7 +64,7 @@ def add_exercises():
             "muscleGroups": ["inti", "kardio", "core", "cardio"],
             "difficulty": ExerciseDifficulty.beginner,
             "instructions": ["Lari di tempat", "Angkat lutut tinggi", "Lakukan dengan cepat"],
-            "isActive": True
+            "isActive": False
         },
         {
             "name": "Shoulder Press",
@@ -53,7 +74,7 @@ def add_exercises():
             "muscleGroups": ["bahu", "triceps", "shoulders"],
             "difficulty": ExerciseDifficulty.beginner,
             "instructions": ["Pegang beban", "Angkat lurus ke atas", "Turunkan perlahan"],
-            "isActive": True
+            "isActive": False
         }
     ]
 
@@ -63,9 +84,17 @@ def add_exercises():
             if not existing:
                 ex = Exercise(**ex_data)
                 session.add(ex)
-                print(f"Added {ex.name}")
+                print(f"Added {ex_data['name']}")
             else:
-                print(f"Already exists {ex.name}")
+                # Update all important fields for existing exercises
+                existing.isActive = ex_data["isActive"]
+                existing.muscleGroups = ex_data["muscleGroups"]
+                existing.difficulty = ex_data["difficulty"]
+                existing.description = ex_data["description"]
+                existing.instructions = ex_data["instructions"]
+                existing.secondaryMuscles = ex_data.get("secondaryMuscles", [])
+                session.add(existing)
+                print(f"Updated {ex_data['name']} (isActive={ex_data['isActive']})")
         session.commit()
         print("Done!")
 

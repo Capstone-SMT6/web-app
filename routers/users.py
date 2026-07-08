@@ -545,6 +545,18 @@ def read_user_stats_me(
         session.add(stats)
         session.commit()
         session.refresh(stats)
+    else:
+        # Dynamically evaluate streak breakage
+        if stats.lastActiveDate:
+            today = date.today()
+            yesterday = today - timedelta(days=1)
+            # If the last active date is older than yesterday, the streak is broken
+            if stats.lastActiveDate < yesterday and stats.currentStreak > 0:
+                stats.currentStreak = 0
+                session.add(stats)
+                session.commit()
+                session.refresh(stats)
+
     return stats
 
 
@@ -853,13 +865,19 @@ def get_dashboard_report(
         activity_val = min(total_seconds / max_duration, 1.0)
         weekly_activity.append(round(activity_val, 2))
 
-    # 2. Goals Progress
-    consistency = min((stats.currentStreak if stats else 0) / 30.0, 1.0) if stats else 0.0
-    strength = min(((stats.totalPushUps if stats else 0) + (stats.totalSitUps if stats else 0)) / 1000.0, 1.0) if stats else 0.0
+    # 2. Goals Progress (Target Bulanan)
+    # Konsistensi: Target 30 hari longest streak
+    consistency = min((stats.longestStreak if stats else 0) / 30.0, 1.0) if stats else 0.0
+    
+    # Aktivitas Bulanan: Target 16 hari aktif dalam sebulan (sekitar 4x seminggu)
+    start_of_month = today.replace(day=1)
+    month_logs = session.exec(select(DailyLog).where(DailyLog.user_id == current_user.id, DailyLog.date >= start_of_month)).all()
+    active_days_this_month = len(set(log.date for log in month_logs))
+    aktivitas = min(active_days_this_month / 16.0, 1.0)
     
     goals_progress = {
-        "Konsistensi": round(consistency, 2),
-        "Kekuatan": round(strength, 2)
+        "Konsistensi (Streak Tertinggi)": round(consistency, 2),
+        "Aktivitas Bulan Ini": round(aktivitas, 2)
     }
 
     # 3. AI Insights

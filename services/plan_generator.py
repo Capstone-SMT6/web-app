@@ -29,6 +29,10 @@ from models import (
 )
 
 
+# ── Supported exercises (only those with pose detection) ───────────────────
+SUPPORTED_SLUGS = {"push-up", "squat", "plank", "sit-up"}
+
+
 # ── BMR / TDEE helpers ─────────────────────────────────────────────────────
 
 def _calculate_bmr(gender: str, weight: float, height: float, age: int) -> float:
@@ -124,23 +128,28 @@ _ALLOWED_DIFFICULTIES = {
 
 
 # ── Muscle-group split templates ────────────────────────────────────────────
+# Only references muscle groups covered by the 4 supported exercises:
+#   Push Up  → dada, chest, bahu, shoulders, triceps
+#   Squat    → kaki, legs, bokong, glutes
+#   Plank    → inti, core, perut, abs
+#   Sit Up   → perut, abs, inti, core
 
 _DAILY_FOCUS = {
     GoalEnum.weight_loss: [
-        ["kardio", "cardio", "perut", "inti", "core", "full body"], # Cardio & Core Focus
-        ["dada", "chest", "bahu", "shoulders", "triceps", "punggung", "kardio", "cardio"], # Upper & Cardio
-        ["kaki", "legs", "bokong", "glutes", "kardio", "cardio"], # Lower & Cardio
-        ["full_body", "full body", "chest", "dada", "kaki", "legs"], # Full Body HIIT
+        ["dada", "chest", "kaki", "legs", "inti", "core"],       # Push Up + Squat + Plank
+        ["perut", "abs", "kaki", "legs", "dada", "chest"],       # Sit Up + Squat + Push Up
+        ["inti", "core", "dada", "chest", "perut", "abs"],       # Plank + Push Up + Sit Up
+        ["kaki", "legs", "inti", "core", "perut", "abs"],        # Squat + Plank + Sit Up
     ],
     GoalEnum.muscle_gain: [
-        ["dada", "chest", "bahu", "shoulders", "triceps", "punggung", "back", "biceps", "lengan"], # Upper Body
-        ["kaki", "legs", "bokong", "glutes", "perut", "inti", "core"], # Lower Body & Core
-        ["full_body", "full body", "chest", "dada", "kaki", "legs"], # Full Body Power
+        ["dada", "chest", "kaki", "legs", "inti", "core"],       # Push Up + Squat + Plank
+        ["perut", "abs", "kaki", "legs", "dada", "chest"],       # Sit Up + Squat + Push Up
+        ["dada", "chest", "inti", "core", "perut", "abs"],       # Push Up + Plank + Sit Up
     ],
     GoalEnum.maintain: [
-        ["dada", "chest", "bahu", "shoulders", "punggung", "perut", "inti", "core"], # Upper & Core
-        ["kaki", "legs", "bokong", "glutes", "kardio", "cardio"], # Lower & Cardio
-        ["full_body", "full body"], # Full Body
+        ["dada", "chest", "inti", "core", "perut", "abs"],       # Push Up + Plank + Sit Up
+        ["kaki", "legs", "dada", "chest", "inti", "core"],       # Squat + Push Up + Plank
+        ["kaki", "legs", "perut", "abs", "dada", "chest"],       # Squat + Sit Up + Push Up
     ],
 }
 
@@ -226,6 +235,9 @@ def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: 
 
     # Filter by difficulty
     eligible = [e for e in all_exercises if e.difficulty in allowed_diff]
+
+    # Filter to only supported exercises (those with pose detection)
+    eligible = [e for e in eligible if e.slug in SUPPORTED_SLUGS]
 
     # Filter by equipment
     user_equipment = set(eq.lower() for eq in (profile.equipment or []))
