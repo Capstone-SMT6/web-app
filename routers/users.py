@@ -710,13 +710,37 @@ def log_workout(
         stats = UserStats(user_id=current_user.id)
         session.add(stats)
 
+    from models import Exercise
+    from sqlalchemy import func
+    import uuid
+
     for ex in payload.exercises:
-        name = ex.exercise_name.lower().replace('-', ' ')
+        name_clean = ex.exercise_name.lower().replace('-', ' ').strip()
         total_reps = ex.sets_completed * ex.reps_completed
-        if 'push' in name:
+        if 'push' in name_clean:
             stats.totalPushUps += total_reps
-        elif 'sit' in name:
+        elif 'sit' in name_clean:
             stats.totalSitUps += total_reps
+            
+        # Create ExerciseLog for this exercise
+        db_exercise = session.exec(
+            select(Exercise).where(
+                (func.lower(Exercise.name) == name_clean) |
+                (Exercise.slug == ex.exercise_name.lower())
+            )
+        ).first()
+        exercise_id = db_exercise.id if db_exercise else uuid.UUID("00000000-0000-0000-0000-000000000000")
+        
+        exercise_log = ExerciseLog(
+            session_id=workout_session.id,
+            exercise_id=exercise_id,
+            set_number=ex.sets_completed,
+            reps_completed=ex.reps_completed,
+            duration_seconds=ex.duration_seconds,
+            is_manual_input=False,
+            form_mistakes=ex.form_mistakes,
+        )
+        session.add(exercise_log)
 
     # Streak logic
     yesterday = today - timedelta(days=1)
@@ -744,6 +768,53 @@ def log_workout(
 
     session.commit()
     return {"message": "Workout logged", "current_streak": stats.currentStreak}
+
+
+@router.get("/me/workout-chart")
+def get_workout_chart(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    from sqlalchemy import func
+    from datetime import date, timedelta
+    from models import Exercise, ExerciseLog
+    
+    thirty_days_ago = date.today() - timedelta(days=30)
+    
+    # 1. Overall Daily Time
+    daily_overall = session.exec(
+        select(WorkoutSession.date, func.sum(WorkoutSession.duration_seconds))
+        .where(WorkoutSession.user_id == current_user.id, WorkoutSession.date >= thirty_days_ago)
+        .group_by(WorkoutSession.date)
+        .order_by(WorkoutSession.date)
+    ).all()
+    
+    overall_chart = [{"date": d.isoformat(), "duration_seconds": s} for d, s in daily_overall]
+    
+    # 2. Exercise Specific Pace/Time
+    daily_exercises = session.exec(
+        select(WorkoutSession.date, Exercise.name, func.sum(ExerciseLog.duration_seconds), func.sum(ExerciseLog.reps_completed))
+        .join(ExerciseLog, WorkoutSession.id == ExerciseLog.session_id)
+        .join(Exercise, ExerciseLog.exercise_id == Exercise.id)
+        .where(WorkoutSession.user_id == current_user.id, WorkoutSession.date >= thirty_days_ago)
+        .group_by(WorkoutSession.date, Exercise.name)
+        .order_by(WorkoutSession.date)
+    ).all()
+    
+    exercises_chart = {}
+    for d, name, dur, reps in daily_exercises:
+        if name not in exercises_chart:
+            exercises_chart[name] = []
+        exercises_chart[name].append({
+            "date": d.isoformat(),
+            "duration_seconds": dur,
+            "reps": reps
+        })
+        
+    return {
+        "overall": overall_chart,
+        "exercises": exercises_chart
+    }
 
 
 @router.get("/", response_model=List[User])
@@ -890,17 +961,105 @@ def get_dashboard_report(
     wawasan_ai = "Tetap semangat berlatih! Lanjutkan konsistensi Anda."
     fokus_hari_ini = ["Tingkatkan repetisi", "Jaga postur"]
 
+    # Aggregate form mistakes from the last 7 days
+    from models import ExerciseLog
+    recent_logs = session.exec(
+        select(ExerciseLog)
+        .join(WorkoutSession, ExerciseLog.session_id == WorkoutSession.id)
+        .where(
+            WorkoutSession.user_id == current_user.id,
+            WorkoutSession.date >= today - timedelta(days=7)
+        )
+    ).all()
+
+    total_mistakes = {}
+    ai_recorded_sessions = 0
+    for log in recent_logs:
+        if log.form_mistakes is not None:
+            ai_recorded_sessions += 1
+            for mistake, count in log.form_mistakes.items():
+                total_mistakes[mistake] = total_mistakes.get(mistake, 0) + count
+
+    mistakes_str = ""
+    if ai_recorded_sessions > 0 and total_mistakes:
+        # Sort and take top 3 mistakes
+        top_mistakes = sorted(total_mistakes.items(), key=lambda x: x[1], reverse=True)[:3]
+        mistakes_str = "Kesalahan form dominan minggu ini:\n" + "\n".join([f"- {m}: {c} kali" for m, c in top_mistakes])
+    elif ai_recorded_sessions > 0 and not total_mistakes:
+        mistakes_str = "Sesi latihan terekam kamera AI dan tidak ada kesalahan dominan (Form Sempurna!)."
+    else:
+        mistakes_str = "Catatan Sistem: Data form_mistakes (evaluasi postur) tidak terekam pada periode ini. Fokuskan analisa pada volume dan konsistensi saja."
+
+    # Fetch Nutrition Summary for the last 7 days
+    from models import NutritionSummary
+    recent_nutrition = session.exec(
+        select(NutritionSummary).where(
+            NutritionSummary.user_id == current_user.id,
+            NutritionSummary.date >= today - timedelta(days=7)
+        )
+    ).all()
+
+    avg_kcal = 0
+    avg_protein = 0
+    if recent_nutrition:
+        avg_kcal = sum(n.total_kcal for n in recent_nutrition) / len(recent_nutrition)
+        avg_protein = sum(n.total_protein_g for n in recent_nutrition) / len(recent_nutrition)
+
+    nutrition_str = ""
+    if recent_nutrition:
+        nutrition_str = f"- Rata-rata Asupan Kalori (7 hari): {avg_kcal:.1f} kcal/hari (Target: {profile.target_daily_kcal:.1f} kcal)\n"
+        nutrition_str += f"            - Rata-rata Protein (7 hari): {avg_protein:.1f} g/hari"
+    else:
+        nutrition_str = "- Data Asupan Nutrisi: Belum ada data nutrisi tercatat minggu ini."
+
+    onboarding_str = f"- Umur: {profile.age} tahun, Berat: {profile.weight} kg, Tinggi: {profile.height} cm\n"
+    onboarding_str += f"            - Tingkat Pengalaman: {profile.skillLevel.value}, Intensitas: {profile.intensity.value}\n"
+    onboarding_str += f"            - BMR: {profile.bmr:.1f} kcal, TDEE: {profile.tdee:.1f} kcal"
+
+    # Aggregate exercise volume for the last 7 days
+    from models import Exercise
+    from sqlalchemy import func
+    
+    weekly_exercise_totals = session.exec(
+        select(Exercise.name, func.sum(ExerciseLog.reps_completed))
+        .join(ExerciseLog, Exercise.id == ExerciseLog.exercise_id)
+        .join(WorkoutSession, ExerciseLog.session_id == WorkoutSession.id)
+        .where(
+            WorkoutSession.user_id == current_user.id,
+            WorkoutSession.date >= today - timedelta(days=7)
+        )
+        .group_by(Exercise.name)
+    ).all()
+
+    exercise_totals_str = ""
+    if weekly_exercise_totals:
+        exercise_totals_str = "\n".join([f"            - Total {name}: {total} repetisi/detik" for name, total in weekly_exercise_totals])
+    else:
+        exercise_totals_str = "            - Belum ada sesi latihan tercatat minggu ini."
+
     if GOOGLE_API_KEY and profile and stats:
         try:
             genai_client = genai.Client(api_key=GOOGLE_API_KEY)
             prompt = f"""
-            Kamu adalah AI Personal Trainer SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
-            - Streak Latihan Saat Ini: {stats.currentStreak} hari
-            - Total Push Ups: {stats.totalPushUps}
-            - Total Sit Ups: {stats.totalSitUps}
-            - Goal Utama User: {profile.goal.value}
+            Kamu adalah AI Personal Trainer sekaligus Pengawas Nutrisi SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
             
-            Berikan feedback yang spesifik, memotivasi, dan tunjukkan pencapaian atau hal yang perlu ditingkatkan secara ringkas.
+            [PROFIL FISIK & TARGET]
+            - Goal Utama User: {profile.goal.value}
+            {onboarding_str}
+            
+            [PERFORMA LATIHAN MINGGU INI]
+            - Streak Latihan Saat Ini: {stats.currentStreak} hari
+{exercise_totals_str}
+            
+            {mistakes_str}
+            
+            [ASUPAN NUTRISI MINGGU INI]
+            {nutrition_str}
+            
+            Sebagai trainer dan pengawas nutrisi, berikan feedback yang spesifik, memotivasi, dan arahkan user dengan tepat ke goal mereka.
+            - Jika asupan kalori/protein terlalu jauh dari target TDEE (berlebih atau kurang), berikan saran pola makan yang sesuai goal.
+            - Jika ada catatan tentang kesalahan form, berikan saran perbaikan postur agar terhindar dari cedera.
+            - Jaga respons tetap ringkas, padat, dan menyemangati!
             
             Berikan output HANYA dalam format JSON valid dengan dua key:
             "wawasan_ai" : "string kesimpulan ringkas (1-2 kalimat)",

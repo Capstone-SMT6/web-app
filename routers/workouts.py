@@ -20,6 +20,7 @@ class ExerciseLogInput(BaseModel):
     exercise_name: str   # nama latihan (free text untuk sekarang)
     set_number: int
     reps_completed: int
+    form_mistakes: Optional[dict] = None
 
 class StartWorkoutRequest(BaseModel):
     duration_seconds: int = 0
@@ -126,6 +127,7 @@ def start_workout_session(
             set_number=log.set_number,
             reps_completed=log.reps_completed,
             is_manual_input=True,
+            form_mistakes=log.form_mistakes,
         )
         session.add(exercise_log)
         total_reps += log.reps_completed

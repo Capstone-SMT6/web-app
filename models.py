@@ -289,7 +289,9 @@ class ExerciseLog(SQLModel, table=True):
     exercise_id: uuid.UUID = Field(foreign_key="exercise.id")
     set_number: int
     reps_completed: int
+    duration_seconds: int = Field(default=0)
     is_manual_input: bool = Field(default=False)
+    form_mistakes: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 

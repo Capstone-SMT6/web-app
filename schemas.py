@@ -135,6 +135,8 @@ class WorkoutLogExercise(BaseModel):
     exercise_name: str
     sets_completed: int
     reps_completed: int
+    duration_seconds: int = 0
+    form_mistakes: Optional[dict] = None
 
 
 class WorkoutLogRequest(BaseModel):
