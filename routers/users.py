@@ -1012,7 +1012,7 @@ def _generate_and_save_insight(user_id: str):
         select(ExerciseLog)
         .join(WorkoutSession, ExerciseLog.session_id == WorkoutSession.id)
         .where(
-            WorkoutSession.user_id == current_user.id,
+            WorkoutSession.user_id == user_id,
             WorkoutSession.date >= today - timedelta(days=7)
         )
     ).all()
@@ -1039,7 +1039,7 @@ def _generate_and_save_insight(user_id: str):
     from models import NutritionSummary
     recent_nutrition = session.exec(
         select(NutritionSummary).where(
-            NutritionSummary.user_id == current_user.id,
+            NutritionSummary.user_id == user_id,
             NutritionSummary.date >= today - timedelta(days=7)
         )
     ).all()
@@ -1070,7 +1070,7 @@ def _generate_and_save_insight(user_id: str):
         .join(ExerciseLog, Exercise.id == ExerciseLog.exercise_id)
         .join(WorkoutSession, ExerciseLog.session_id == WorkoutSession.id)
         .where(
-            WorkoutSession.user_id == current_user.id,
+            WorkoutSession.user_id == user_id,
             WorkoutSession.date >= today - timedelta(days=7)
         )
         .group_by(Exercise.name)
