@@ -679,9 +679,12 @@ def get_workout_history(
     ]
 
 
+from fastapi import BackgroundTasks
+
 @router.post("/me/workout-log")
 def log_workout(
     payload: WorkoutLogRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -695,12 +698,19 @@ def log_workout(
         )
     ).first()
 
+    # Calculate calories burned
+    profile = session.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == current_user.id)).first()
+    weight_kg = profile.weight if profile else 65.0
+    duration_hours = payload.duration_seconds / 3600.0
+    calories_burned = 5.0 * weight_kg * duration_hours
+
     # Create session record
     workout_session = WorkoutSession(
         user_id=current_user.id,
         plan_id=plan.id if plan else None,
         date=today,
         duration_seconds=payload.duration_seconds,
+        calories_burned=calories_burned,
     )
     session.add(workout_session)
 
@@ -767,7 +777,10 @@ def log_workout(
         session.add(DailyLog(user_id=current_user.id, date=today, day_type="workout_completed"))
 
     session.commit()
-    return {"message": "Workout logged", "current_streak": stats.currentStreak}
+    # Update weekly insights asynchronously
+    background_tasks.add_task(_generate_and_save_insight, current_user.id)
+    
+    return {"message": "Workout logged", "current_streak": stats.currentStreak, "calories_burned": round(calories_burned, 1)}
 
 
 @router.get("/me/workout-chart")
@@ -952,14 +965,46 @@ def get_dashboard_report(
     }
 
     # 3. AI Insights
+    wawasan_ai = "Selamat datang di SmaCoFit! Mulai sesi latihan pertamamu hari ini untuk mendapatkan analisa AI."
+    fokus_hari_ini = ["Lakukan workout pertamamu", "Sempurnakan kalibrasi postur"]
+    
+    if stats and stats.latest_insight:
+        wawasan_ai = stats.latest_insight.get("wawasan_ai", wawasan_ai)
+        fokus_hari_ini = stats.latest_insight.get("fokus_hari_ini", fokus_hari_ini)
+        
+    return {
+        "insights": {
+            "wawasan_ai": wawasan_ai,
+            "fokus_hari_ini": fokus_hari_ini
+        },
+        "weekly_activity": weekly_activity,
+        "goals_progress": goals_progress
+    }
+
+def _generate_and_save_insight(user_id: str):
     import os
     import json as json_lib
     from google import genai
     from google.genai import types
+    from datetime import date, timedelta
+    from sqlmodel import Session, select
+    from database import engine
+    from models import UserStats, UserFitnessProfile, WorkoutSession, ExerciseLog, NutritionSummary, Exercise
+    from sqlalchemy import func
 
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    wawasan_ai = "Tetap semangat berlatih! Lanjutkan konsistensi Anda."
-    fokus_hari_ini = ["Tingkatkan repetisi", "Jaga postur"]
+    if not GOOGLE_API_KEY:
+        return
+
+    with Session(engine) as session:
+        stats = session.exec(select(UserStats).where(UserStats.user_id == user_id)).first()
+        profile = session.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == user_id)).first()
+        if not stats or not profile:
+            return
+
+        today = date.today()
+
+        # Aggregate form mistakes from the last 7 days
 
     # Aggregate form mistakes from the last 7 days
     from models import ExerciseLog
@@ -1037,55 +1082,47 @@ def get_dashboard_report(
     else:
         exercise_totals_str = "            - Belum ada sesi latihan tercatat minggu ini."
 
-    if GOOGLE_API_KEY and profile and stats:
-        try:
-            genai_client = genai.Client(api_key=GOOGLE_API_KEY)
-            prompt = f"""
-            Kamu adalah AI Personal Trainer sekaligus Pengawas Nutrisi SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
-            
-            [PROFIL FISIK & TARGET]
-            - Goal Utama User: {profile.goal.value}
-            {onboarding_str}
-            
-            [PERFORMA LATIHAN MINGGU INI]
-            - Streak Latihan Saat Ini: {stats.currentStreak} hari
-{exercise_totals_str}
-            
-            {mistakes_str}
-            
-            [ASUPAN NUTRISI MINGGU INI]
-            {nutrition_str}
-            
-            Sebagai trainer dan pengawas nutrisi, berikan feedback yang spesifik, memotivasi, dan arahkan user dengan tepat ke goal mereka.
-            - Jika asupan kalori/protein terlalu jauh dari target TDEE (berlebih atau kurang), berikan saran pola makan yang sesuai goal.
-            - Jika ada catatan tentang kesalahan form, berikan saran perbaikan postur agar terhindar dari cedera.
-            - Jaga respons tetap ringkas, padat, dan menyemangati!
-            
-            Berikan output HANYA dalam format JSON valid dengan dua key:
-            "wawasan_ai" : "string kesimpulan ringkas (1-2 kalimat)",
-            "fokus_hari_ini" : ["array of string", "max 2 poin singkat"]
-            """
-            
-            response = genai_client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
+        if GOOGLE_API_KEY and profile and stats:
+            try:
+                genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+                prompt = f"""
+                Kamu adalah AI Personal Trainer sekaligus Pengawas Nutrisi SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
+                
+                [PROFIL FISIK & TARGET]
+                - Goal Utama User: {profile.goal.value}
+                {onboarding_str}
+                
+                [PERFORMA LATIHAN MINGGU INI]
+                - Streak Latihan Saat Ini: {stats.currentStreak} hari
+                {exercise_totals_str}
+                
+                {mistakes_str}
+                
+                [ASUPAN NUTRISI MINGGU INI]
+                {nutrition_str}
+                
+                Sebagai trainer dan pengawas nutrisi, berikan feedback yang spesifik, memotivasi, dan arahkan user dengan tepat ke goal mereka.
+                - Jika asupan kalori/protein terlalu jauh dari target TDEE (berlebih atau kurang), berikan saran pola makan yang sesuai goal.
+                - Jika ada catatan tentang kesalahan form, berikan saran perbaikan postur agar terhindar dari cedera.
+                - Jaga respons tetap ringkas, padat, dan menyemangati!
+                
+                Berikan output HANYA dalam format JSON valid dengan dua key:
+                "wawasan_ai" : "string kesimpulan ringkas (1-2 kalimat)",
+                "fokus_hari_ini" : ["array of string", "max 2 poin singkat"]
+                """
+                
+                response = genai_client.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                    )
                 )
-            )
-            ai_data = json_lib.loads(response.text)
-            if "wawasan_ai" in ai_data:
-                wawasan_ai = ai_data["wawasan_ai"]
-            if "fokus_hari_ini" in ai_data:
-                fokus_hari_ini = ai_data["fokus_hari_ini"]
-        except Exception as e:
-            print("Error generating AI insight:", e)
-    
-    return {
-        "insights": {
-            "wawasan_ai": wawasan_ai,
-            "fokus_hari_ini": fokus_hari_ini
-        },
-        "weekly_activity": weekly_activity,
-        "goals_progress": goals_progress
-    }
+                ai_data = json_lib.loads(response.text)
+                
+                stats.latest_insight = ai_data
+                stats.updatedAt = datetime.now(timezone.utc)
+                session.add(stats)
+                session.commit()
+            except Exception as e:
+                print("Error generating AI insight:", e)

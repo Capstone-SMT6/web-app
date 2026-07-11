@@ -93,11 +93,18 @@ def start_workout_session(
     """
     today = date.today()
 
+    # Calculate calories burned
+    profile = session.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == current_user.id)).first()
+    weight_kg = profile.weight if profile else 65.0
+    duration_hours = body.duration_seconds / 3600.0
+    calories_burned = 5.0 * weight_kg * duration_hours
+
     # 1. Buat WorkoutSession
     workout_session = WorkoutSession(
         user_id=current_user.id,
         date=today,
         duration_seconds=body.duration_seconds,
+        calories_burned=calories_burned,
     )
     session.add(workout_session)
     session.flush()  # dapatkan ID
@@ -167,6 +174,7 @@ def start_workout_session(
         "session_id": workout_session.id,
         "total_reps": total_reps,
         "streak": stats.currentStreak if stats else 0,
+        "calories_burned": round(calories_burned, 1),
     }
 
 
@@ -190,6 +198,7 @@ def get_my_sessions(
 
 class GeneratePlanRequest(BaseModel):
     fitness_profile_id: str | None = None  # if None, uses user's existing profile
+    selected_days: list[str] | None = None
 
 
 @router.post("/generate-plan", status_code=201)
@@ -210,7 +219,7 @@ def generate_training_plan(
         if not profile:
             raise HTTPException(status_code=404, detail="No fitness profile found. Complete onboarding first.")
 
-    plan = generate_plan(profile, session)
+    plan = generate_plan(profile, session, selected_days=body.selected_days)
     return get_active_plan(current_user.id, session)
 
 

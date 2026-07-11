@@ -24,7 +24,7 @@ from sqlmodel import Session, select
 from dotenv import load_dotenv
 
 from database import get_session
-from models import User, ChatSession, ChatMessage, RAGKnowledge
+from models import User, ChatSession, ChatMessage, RAGKnowledge, UserFitnessProfile, UserStats, WorkoutSession
 from routers.users import get_current_user
 
 load_dotenv()
@@ -117,7 +117,40 @@ Answer the user's question based ONLY on the context provided below. If the cont
 
 CONTEXT:
 {context}
+
+USER CONTEXT (About the user):
+{user_context}
 """
+
+def _build_user_context(user_id: str, db: Session) -> str:
+    profile = db.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == user_id)).first()
+    stats = db.exec(select(UserStats).where(UserStats.user_id == user_id)).first()
+    recent_workouts = db.exec(
+        select(WorkoutSession)
+        .where(WorkoutSession.user_id == user_id)
+        .order_by(WorkoutSession.date.desc())
+        .limit(3)
+    ).all()
+    
+    parts = []
+    if profile:
+        parts.append(f"- Age: {profile.age}, Gender: {profile.gender.value if profile.gender else 'N/A'}")
+        parts.append(f"- Goal: {profile.goal.value if profile.goal else 'N/A'}, Level: {profile.skillLevel.value if profile.skillLevel else 'N/A'}")
+        parts.append(f"- Weight: {profile.weight} kg, Height: {profile.height} cm")
+    
+    if stats:
+        parts.append(f"- Current streak: {stats.currentStreak} days, Longest streak: {stats.longestStreak} days")
+        parts.append(f"- Total Push-Ups: {stats.totalPushUps}, Total Sit-Ups: {stats.totalSitUps}")
+    if recent_workouts:
+        parts.append("- Recent Workouts:")
+        for w in recent_workouts:
+            parts.append(f"  * {w.date.strftime('%Y-%m-%d')}: {w.duration_seconds}s duration, burned {round(w.calories_burned, 1) if w.calories_burned else 0} kcal")
+            
+    if not parts:
+        return "No user context available."
+        
+    return "\n".join(parts)
+
 # ── Session endpoints ─────────────────────────────────────────────────────────
 @router.post("/sessions", response_model=SessionResponse)
 def create_session(
@@ -220,13 +253,14 @@ async def chat(
             chat_session.updatedAt = datetime.now(timezone.utc)
             db.add(chat_session)
 
+        user_ctx = _build_user_context(current_user.id, db)
         response = genai_client.models.generate_content(
             model=CHAT_MODEL,
             contents=history + [
                 types.Content(role="user", parts=[types.Part(text=req.message)])
             ],
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT.format(context=context),
+                system_instruction=SYSTEM_PROMPT.format(context=context, user_context=user_ctx),
             ),
         )
 
@@ -289,6 +323,7 @@ async def chat_stream(
         yield f"data: {json_lib.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
         full_answer = []
+        user_ctx = _build_user_context(current_user.id, db)
         try:
             for chunk in genai_client.models.generate_content_stream(
                 model=CHAT_MODEL,
@@ -296,7 +331,7 @@ async def chat_stream(
                     types.Content(role="user", parts=[types.Part(text=req.message)])
                 ],
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT.format(context=context),
+                    system_instruction=SYSTEM_PROMPT.format(context=context, user_context=user_ctx),
                 ),
             ):
                 if chunk.text:

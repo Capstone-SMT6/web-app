@@ -127,6 +127,7 @@ class UserStats(SQLModel, table=True):
     lastActiveDate: Optional[date] = Field(default=None, sa_column_kwargs={"name": "last_active_date"})
     totalPushUps: int = Field(default=0, sa_column_kwargs={"name": "total_push_ups"})
     totalSitUps: int = Field(default=0, sa_column_kwargs={"name": "total_sit_ups"})
+    latest_insight: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 
 
@@ -277,6 +278,7 @@ class WorkoutSession(SQLModel, table=True):
     plan_id: Optional[str] = Field(default=None, foreign_key="exerciseplan.id")
     date: date
     duration_seconds: int = Field(default=0)
+    calories_burned: float = Field(default=0.0)
     createdAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "created_at"})
 
 

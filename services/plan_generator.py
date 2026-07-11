@@ -13,6 +13,10 @@ import math
 from datetime import date
 from typing import List, Dict, Optional
 from sqlmodel import Session, select
+import os
+import json
+from google import genai
+from google.genai import types
 
 from models import (
     UserFitnessProfile,
@@ -165,6 +169,67 @@ def _match_exercise_focus(exercise: Exercise, focus_groups: List[str]) -> bool:
     return any(fg.lower() in " ".join(all_muscles) for fg in focus_groups)
 
 
+def _generate_plan_rule_based(profile: UserFitnessProfile, active_days: int, eligible: List[Exercise], rest_indices: set) -> list:
+    import random
+    days_data = []
+    
+    focus_list = _DAILY_FOCUS.get(profile.goal, _DAILY_FOCUS[GoalEnum.maintain])
+    
+    focus_idx = 0
+    for day_of_week in range(7):
+        if day_of_week in rest_indices:
+            days_data.append({
+                "day_of_week": day_of_week,
+                "is_rest_day": True,
+                "exercises": []
+            })
+            continue
+            
+        current_focus = focus_list[focus_idx % len(focus_list)]
+        focus_idx += 1
+        
+        shuffled = eligible.copy()
+        random.shuffle(shuffled)
+        
+        selected_exs = []
+        for muscle in current_focus:
+            for ex in shuffled:
+                if _match_exercise_focus(ex, [muscle]) and ex not in selected_exs:
+                    selected_exs.append(ex)
+                    break
+            if len(selected_exs) >= 4:
+                break
+                
+        if len(selected_exs) < 3:
+            for ex in shuffled:
+                if ex not in selected_exs:
+                    selected_exs.append(ex)
+                if len(selected_exs) >= 3:
+                    break
+                    
+        ex_list = []
+        for ex in selected_exs:
+            if ex.category == "Repetisi":
+                ex_list.append({
+                    "slug": ex.slug,
+                    "target_sets": 3,
+                    "target_reps": 10 if profile.difficultyLevel == "pemula" else 15
+                })
+            else:
+                ex_list.append({
+                    "slug": ex.slug,
+                    "target_sets": 3,
+                    "target_duration_seconds": 30 if profile.difficultyLevel == "pemula" else 60
+                })
+                
+        days_data.append({
+            "day_of_week": day_of_week,
+            "is_rest_day": False,
+            "exercises": ex_list
+        })
+        
+    return days_data
+
 # ── Main generator ─────────────────────────────────────────────────────────
 
 def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: List[str] = None, applied_constraints: List[str] = None) -> ExercisePlan:
@@ -239,26 +304,27 @@ def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: 
     # Filter to only supported exercises (those with pose detection)
     eligible = [e for e in eligible if e.slug in SUPPORTED_SLUGS]
 
-    # Filter by equipment
-    user_equipment = set(eq.lower() for eq in (profile.equipment or []))
-    if user_equipment:
-        def _equip_ok(ex: Exercise) -> bool:
-            req = set(r.lower() for r in (ex.equipmentRequired or []))
-            # exercise is OK if it requires no equipment, or all required equipment is available
-            return len(req) == 0 or req.issubset(user_equipment)
-        eligible = [e for e in eligible if _equip_ok(e)]
+    # Generate JSON structure via Gemini
+    try:
+        gemini_days = _generate_plan_via_gemini(profile, active_days, eligible, rest_indices)
+        
+        # Additional safety check in case Gemini returns empty list
+        if not gemini_days:
+            print("Gemini returned empty plan, falling back to rule-based generation")
+            gemini_days = _generate_plan_rule_based(profile, active_days, eligible, rest_indices)
+            
+    except Exception as e:
+        print(f"Failed to generate plan via Gemini: {e}")
+        gemini_days = _generate_plan_rule_based(profile, active_days, eligible, rest_indices)
 
-    # Index by category for quick lookup
-    by_category: Dict[str, List[Exercise]] = {}
-    for ex in eligible:
-        by_category.setdefault(ex.category.value, []).append(ex)
+    # 6. Build days and exercises from Gemini JSON
+    # Build a lookup for exercise by slug
+    ex_by_slug = {e.slug: e for e in eligible}
 
-    # 6. Build days
-    focus_templates = _DAILY_FOCUS.get(profile.goal, _DAILY_FOCUS[GoalEnum.maintain])
-    scheme = _set_rep_scheme(profile.goal.value, profile.difficultyLevel.value)
-
-    for dow in range(7):
-        is_rest = dow in rest_indices
+    for day_data in gemini_days:
+        dow = int(day_data.get("day_of_week", 0))
+        is_rest = bool(day_data.get("is_rest_day", False))
+        
         plan_day = PlanDay(
             plan_id=plan.id,
             day_of_week=dow,
@@ -269,51 +335,78 @@ def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: 
 
         if is_rest:
             continue
-
-        # Pick focus for this training day
-        training_day_index = sum(1 for d in range(dow) if d not in rest_indices)
-        focus = focus_templates[training_day_index % len(focus_templates)]
-
-        # Select exercises matching focus
-        candidates = [e for e in eligible if _match_exercise_focus(e, focus)]
-        # Fallback: if not enough candidates, use all eligible
-        if len(candidates) < 2:
-            candidates = eligible
-
-        # Pick up to 4-6 exercises for the day (varied by intensity)
-        n_exercises = min(6 if profile.intensity in (IntensityEnum.medium, IntensityEnum.high) else 4, len(candidates))
-
-        # Rotate through candidates deterministically based on day
-        start_idx = dow * 2 % max(len(candidates), 1)
-        selected = []
-        for i in range(n_exercises):
-            idx = (start_idx + i) % len(candidates)
-            selected.append(candidates[idx])
-
-        # Create PlanDayExercise entries
-        for order, exercise in enumerate(selected, start=1):
-            sets = scheme["sets"]
-            reps = scheme["reps"]
-            duration = None
-
-            # Plank-type exercises use duration instead of reps
-            if "plank" in exercise.name.lower():
-                reps = None
-                duration = 30 if profile.skillLevel == SkillLevelEnum.beginner else 45 if profile.skillLevel == SkillLevelEnum.intermediate else 60
-
+            
+        exercises_list = day_data.get("exercises", [])
+        for order, ex_data in enumerate(exercises_list, start=1):
+            slug = ex_data.get("slug")
+            if slug not in ex_by_slug:
+                continue
+                
+            exercise = ex_by_slug[slug]
             pde = PlanDayExercise(
                 plan_day_id=plan_day.id,
                 exercise_id=exercise.id,
                 order=order,
-                target_sets=sets,
-                target_reps=reps,
-                target_duration_seconds=duration,
+                target_sets=ex_data.get("target_sets", 3),
+                target_reps=ex_data.get("target_reps"),
+                target_duration_seconds=ex_data.get("target_duration_seconds"),
             )
             session.add(pde)
 
     session.commit()
     session.refresh(plan)
     return plan
+
+def _generate_plan_via_gemini(profile: UserFitnessProfile, active_days: int, eligible: List[Exercise], rest_indices: set) -> list:
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY is not set.")
+    client = genai.Client(api_key=api_key)
+    
+    exercise_slugs = [e.slug for e in eligible]
+    prompt = f"""
+You are an expert AI Personal Trainer. Generate a 7-day weekly exercise plan for a user.
+User profile:
+- Age: {profile.age}
+- Gender: {profile.gender.value if profile.gender else 'any'}
+- Goal: {profile.goal.value if profile.goal else 'maintain'}
+- Skill Level: {profile.skillLevel.value if profile.skillLevel else 'beginner'}
+- Training days per week: {active_days}
+
+You must ONLY use the following exercises (identified by their slugs): {", ".join(exercise_slugs)}.
+For 'plank', specify 'target_duration_seconds' and set 'target_sets' to 3-5, but 'target_reps' to null.
+For others, specify 'target_sets' and 'target_reps', but 'target_duration_seconds' to null.
+
+Return ONLY a JSON array of 7 objects (representing Monday to Sunday). 
+Each object must have:
+- "day_of_week": int (0 to 6)
+- "is_rest_day": boolean
+- "exercises": array of objects (empty if is_rest_day=true)
+  - "slug": string (from the allowed list)
+  - "target_sets": int
+  - "target_reps": int or null
+  - "target_duration_seconds": int or null
+
+Make sure there are exactly {active_days} days where is_rest_day=false.
+The days of the week are 0 (Monday) to 6 (Sunday).
+The following days MUST be rest days (is_rest_day=true) and have an empty exercises array: {list(rest_indices)}.
+All other days MUST be active days (is_rest_day=false) and contain exercises.
+"""
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json")
+    )
+    raw_text = response.text.strip()
+    if raw_text.startswith("```json"):
+        raw_text = raw_text[7:]
+    elif raw_text.startswith("```"):
+        raw_text = raw_text[3:]
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
+    return json.loads(raw_text.strip())
+
+
 
 
 def get_active_plan(user_id: str, session: Session) -> Optional[dict]:

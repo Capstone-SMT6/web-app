@@ -87,9 +87,13 @@ def get_food_item(
 
 # User Logging Endpoints
 
+from fastapi import BackgroundTasks
+from routers.users import _generate_and_save_insight
+
 @router.post("/log")
 def create_log_entry(
     payload: FoodLogCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -124,6 +128,9 @@ def create_log_entry(
     
     # Recalculate summary
     recalculate_summary(session, current_user.id, log_date)
+    
+    # Trigger insight generation
+    background_tasks.add_task(_generate_and_save_insight, current_user.id)
     
     return {
         "id": log.id,
