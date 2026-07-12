@@ -139,12 +139,6 @@ def start_workout_session(
         session.add(exercise_log)
         total_reps += log.reps_completed
 
-    # 3. Update total reps di UserStats (sederhana: semua dianggap push up)
-    stats = session.exec(select(UserStats).where(UserStats.user_id == current_user.id)).first()
-    if stats:
-        stats.totalPushUps += total_reps
-        stats.updatedAt = datetime.now(timezone.utc)
-        session.add(stats)
 
     # 4. Tandai hari ini sebagai workout_completed di DailyLog (UPSERT-style)
     existing_daily = session.exec(
@@ -251,40 +245,110 @@ def analytics_summary(
         .order_by(WorkoutSession.date.desc())
     ).all()
 
+    profile = session.exec(select(UserFitnessProfile).where(UserFitnessProfile.user_id == current_user.id)).first()
+    weight_kg = profile.weight if profile else 65.0
+
     stats = session.exec(select(UserStats).where(UserStats.user_id == current_user.id)).first()
 
     total_workouts = len(workouts)
     total_duration = sum(w.duration_seconds for w in workouts)
+    total_calories = sum(w.calories_burned for w in workouts)
     avg_duration = round(total_duration / total_workouts) if total_workouts > 0 else 0
 
     # Count reps from exercise logs
     all_session_ids = [w.id for w in workouts]
     total_reps = 0
-    exercise_counts: dict[str, int] = {}
+    total_mistakes = {}
+    exercise_breakdown: dict[str, dict] = {}
+    
     if all_session_ids:
-        logs = session.exec(
-            select(ExerciseLog).where(ExerciseLog.session_id.in_(all_session_ids))
+        from models import Exercise
+        logs_with_exercise = session.exec(
+            select(ExerciseLog, Exercise)
+            .join(Exercise, ExerciseLog.exercise_id == Exercise.id)
+            .where(ExerciseLog.session_id.in_(all_session_ids))
         ).all()
-        total_reps = sum(log.reps_completed for log in logs)
-        for log in logs:
-            eid = str(log.exercise_id)
-            exercise_counts[eid] = exercise_counts.get(eid, 0) + log.reps_completed
+        
+        for log, ex in logs_with_exercise:
+            total_reps += log.reps_completed
+            name = ex.name
+            if name not in exercise_breakdown:
+                exercise_breakdown[name] = {"reps": 0, "duration": 0, "calories": 0.0}
+            
+            exercise_breakdown[name]["reps"] += log.reps_completed
+            exercise_breakdown[name]["duration"] += log.duration_seconds
+            
+            if log.form_mistakes:
+                for mistake, count in log.form_mistakes.items():
+                    total_mistakes[mistake] = total_mistakes.get(mistake, 0) + count
 
-    # Favorite exercises (top 5 by total reps)
-    favorite_exercises = sorted(
-        exercise_counts.items(), key=lambda x: x[1], reverse=True
-    )[:5]
+    # Calculate calories per exercise
+    for name, data in exercise_breakdown.items():
+        # Calories formula used in backend: 5.0 * weight_kg * duration_hours
+        data["calories"] = 5.0 * weight_kg * (data["duration"] / 3600.0)
+
+    # Convert breakdown to list
+    exercise_breakdown_list = [
+        {"name": k, "reps": v["reps"], "duration": v["duration"], "calories": v["calories"]}
+        for k, v in exercise_breakdown.items()
+    ]
+
+    import os
+    import json as json_lib
+    from google import genai
+    from google.genai import types
+
+    ai_insight = {
+        "score": 100.0,
+        "grade": "A+",
+        "message": "Kamu belum merekam latihan dengan AI. Gunakan kamera SmaCoFit untuk mendapatkan analisa otomatis form postur tubuhmu."
+    }
+    
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    if GOOGLE_API_KEY and total_mistakes:
+        try:
+            genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+            top_mistakes = sorted(total_mistakes.items(), key=lambda x: x[1], reverse=True)[:5]
+            mistakes_str = "\n".join([f"- {m}: {c} kali" for m, c in top_mistakes])
+            
+            prompt = f"""
+            Kamu adalah pelatih kebugaran. Evaluasi performa latihan user ini berdasarkan akumulasi data kesalahan form yang terdeteksi sensor SmaCoFit:
+            
+            KESALAHAN FORM POSTUR:
+            {mistakes_str}
+            
+            Nilai total skor (0-100) dan berikan Grade (A, B, C, D). 100 berarti tidak ada salah. Semakin banyak kesalahan, kurangi skornya.
+            Berikan feedback singkat, 1-2 kalimat untuk memperbaiki kesalahan tersebut.
+            
+            JSON format:
+            "score": <angka_float>,
+            "grade": "<huruf>",
+            "message": "<string_pesan>"
+            """
+            response = genai_client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            parsed_insight = json_lib.loads(response.text)
+            ai_insight["score"] = float(parsed_insight.get("score", 85.0))
+            ai_insight["grade"] = parsed_insight.get("grade", "B")
+            ai_insight["message"] = parsed_insight.get("message", "Sesi latihan terekam.")
+        except Exception as e:
+            print("Error generating workout insight:", e)
+    elif all_session_ids and not total_mistakes:
+        ai_insight["message"] = "Form latihanmu sangat baik! Tidak ada kesalahan postur kritis yang tercatat oleh AI."
 
     return {
         "total_workouts": total_workouts,
         "total_reps": total_reps,
         "total_duration_seconds": total_duration,
+        "total_calories": total_calories,
         "avg_duration_seconds": avg_duration,
         "current_streak": stats.currentStreak if stats else 0,
         "longest_streak": stats.longestStreak if stats else 0,
-        "total_push_ups": stats.totalPushUps if stats else 0,
-        "total_sit_ups": stats.totalSitUps if stats else 0,
-        "favorite_exercises": [{"exercise_id": eid, "total_reps": reps} for eid, reps in favorite_exercises],
+        "exercise_breakdown": exercise_breakdown_list,
+        "ai_insight": ai_insight
     }
 
 

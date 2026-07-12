@@ -185,9 +185,13 @@ class FoodLogCreate(BaseModel):
         return value
 
 # Section 5: AI Insights
-class InsightsModel(BaseModel):
+class InsightSection(BaseModel):
     wawasan_ai: str
     fokus_hari_ini: List[str]
+
+class InsightsModel(BaseModel):
+    beranda: InsightSection
+    laporan: InsightSection
 
 class DashboardReportResponse(BaseModel):
     insights: InsightsModel

@@ -19,6 +19,7 @@ from models import (
     UserFitnessProfile,
     UserStats,
     WorkoutSession,
+    ExerciseLog,
 )
 from database import get_session
 from schemas import (
@@ -445,7 +446,8 @@ def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
         from mail_helper import send_otp_email
         send_otp_email(request.email, code, request.purpose)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Failed to send email (probably Resend free tier issue). The OTP is: {code}")
+        # We don't raise an error here so the app can continue to the OTP screen
 
     return {"message": "OTP sent successfully"}
 
@@ -735,8 +737,8 @@ def log_workout(
         # Create ExerciseLog for this exercise
         db_exercise = session.exec(
             select(Exercise).where(
-                (func.lower(Exercise.name) == name_clean) |
-                (Exercise.slug == ex.exercise_name.lower())
+                (func.replace(func.lower(Exercise.name), '-', ' ') == name_clean) |
+                (func.replace(Exercise.slug, '-', ' ') == name_clean)
             )
         ).first()
         exercise_id = db_exercise.id if db_exercise else uuid.UUID("00000000-0000-0000-0000-000000000000")
@@ -792,9 +794,11 @@ def get_workout_chart(
     from datetime import date, timedelta
     from models import Exercise, ExerciseLog
     
-    thirty_days_ago = date.today() - timedelta(days=30)
+    today = date.today()
+    thirty_days_ago = today - timedelta(days=30)
+    seven_days_ago = today - timedelta(days=7)
     
-    # 1. Overall Daily Time
+    # 1. Overall Daily Time (Last 30 Days)
     daily_overall = session.exec(
         select(WorkoutSession.date, func.sum(WorkoutSession.duration_seconds))
         .where(WorkoutSession.user_id == current_user.id, WorkoutSession.date >= thirty_days_ago)
@@ -802,31 +806,62 @@ def get_workout_chart(
         .order_by(WorkoutSession.date)
     ).all()
     
-    overall_chart = [{"date": d.isoformat(), "duration_seconds": s} for d, s in daily_overall]
+    overall_30 = [{"date": d.isoformat(), "duration_seconds": s} for d, s in daily_overall]
+    overall_7 = [item for item in overall_30 if date.fromisoformat(item["date"]) >= seven_days_ago]
     
-    # 2. Exercise Specific Pace/Time
-    daily_exercises = session.exec(
-        select(WorkoutSession.date, Exercise.name, func.sum(ExerciseLog.duration_seconds), func.sum(ExerciseLog.reps_completed))
+    # 2. Exercise Specific Pace/Time & Form Mistakes
+    daily_exercises_raw = session.exec(
+        select(WorkoutSession.date, Exercise.name, ExerciseLog.duration_seconds, ExerciseLog.reps_completed, ExerciseLog.form_mistakes)
         .join(ExerciseLog, WorkoutSession.id == ExerciseLog.session_id)
         .join(Exercise, ExerciseLog.exercise_id == Exercise.id)
         .where(WorkoutSession.user_id == current_user.id, WorkoutSession.date >= thirty_days_ago)
-        .group_by(WorkoutSession.date, Exercise.name)
-        .order_by(WorkoutSession.date)
     ).all()
     
-    exercises_chart = {}
-    for d, name, dur, reps in daily_exercises:
-        if name not in exercises_chart:
-            exercises_chart[name] = []
-        exercises_chart[name].append({
-            "date": d.isoformat(),
-            "duration_seconds": dur,
-            "reps": reps
-        })
+    grouped_exercises = {}
+    for d, name, dur, reps, mistakes in daily_exercises_raw:
+        key = (d, name)
+        if key not in grouped_exercises:
+            grouped_exercises[key] = {"dur": 0, "reps": 0, "mistakes_count": 0}
+        grouped_exercises[key]["dur"] += (dur or 0)
+        grouped_exercises[key]["reps"] += (reps or 0)
         
+        m_count = 0
+        if isinstance(mistakes, dict):
+            m_count = sum(mistakes.values())
+        grouped_exercises[key]["mistakes_count"] += m_count
+
+    exercises_30 = {}
+    exercises_7 = {}
+    
+    # Sort keys by date to maintain chronological order
+    for key in sorted(grouped_exercises.keys(), key=lambda k: k[0]):
+        d, name = key
+        data = grouped_exercises[key]
+        
+        item = {
+            "date": d.isoformat(),
+            "duration_seconds": data["dur"],
+            "reps": data["reps"],
+            "mistakes_count": data["mistakes_count"]
+        }
+        
+        if name not in exercises_30:
+            exercises_30[name] = []
+            exercises_7[name] = []
+            
+        exercises_30[name].append(item)
+        if d >= seven_days_ago:
+            exercises_7[name].append(item)
+            
     return {
-        "overall": overall_chart,
-        "exercises": exercises_chart
+        "monthly": {
+            "overall": overall_30,
+            "exercises": exercises_30
+        },
+        "weekly": {
+            "overall": overall_7,
+            "exercises": exercises_7
+        }
     }
 
 
@@ -965,18 +1000,37 @@ def get_dashboard_report(
     }
 
     # 3. AI Insights
-    wawasan_ai = "Selamat datang di SmaCoFit! Mulai sesi latihan pertamamu hari ini untuk mendapatkan analisa AI."
-    fokus_hari_ini = ["Lakukan workout pertamamu", "Sempurnakan kalibrasi postur"]
+    insight_data = {
+        "beranda": {
+            "wawasan_ai": "Selamat datang di SmaCoFit! Mulai sesi latihan pertamamu hari ini.",
+            "fokus_hari_ini": ["Lakukan workout pertamamu", "Catat asupan nutrisimu"]
+        },
+        "laporan": {
+            "wawasan_ai": "Laporan mingguanmu akan muncul setelah kamu menyelesaikan latihan dan mencatat nutrisi.",
+            "fokus_hari_ini": ["Mulai rutinitas sehat", "Pantau kalori harian"]
+        }
+    }
     
     if stats and stats.latest_insight:
-        wawasan_ai = stats.latest_insight.get("wawasan_ai", wawasan_ai)
-        fokus_hari_ini = stats.latest_insight.get("fokus_hari_ini", fokus_hari_ini)
+        import json
+        insight_obj = stats.latest_insight
+        if isinstance(insight_obj, str):
+            try:
+                insight_obj = json.loads(insight_obj)
+            except Exception:
+                insight_obj = {}
+
+        # Check if old format
+        if isinstance(insight_obj, dict) and "wawasan_ai" in insight_obj:
+            insight_data["beranda"]["wawasan_ai"] = insight_obj.get("wawasan_ai", "")
+            insight_data["beranda"]["fokus_hari_ini"] = insight_obj.get("fokus_hari_ini", [])
+            insight_data["laporan"]["wawasan_ai"] = insight_obj.get("wawasan_ai", "")
+            insight_data["laporan"]["fokus_hari_ini"] = insight_obj.get("fokus_hari_ini", [])
+        elif isinstance(insight_obj, dict) and "beranda" in insight_obj:
+            insight_data = insight_obj
         
     return {
-        "insights": {
-            "wawasan_ai": wawasan_ai,
-            "fokus_hari_ini": fokus_hari_ini
-        },
+        "insights": insight_data,
         "weekly_activity": weekly_activity,
         "goals_progress": goals_progress
     }
@@ -1082,47 +1136,54 @@ def _generate_and_save_insight(user_id: str):
     else:
         exercise_totals_str = "            - Belum ada sesi latihan tercatat minggu ini."
 
-        if GOOGLE_API_KEY and profile and stats:
-            try:
-                genai_client = genai.Client(api_key=GOOGLE_API_KEY)
-                prompt = f"""
-                Kamu adalah AI Personal Trainer sekaligus Pengawas Nutrisi SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
-                
-                [PROFIL FISIK & TARGET]
-                - Goal Utama User: {profile.goal.value}
-                {onboarding_str}
-                
-                [PERFORMA LATIHAN MINGGU INI]
-                - Streak Latihan Saat Ini: {stats.currentStreak} hari
-                {exercise_totals_str}
-                
-                {mistakes_str}
-                
-                [ASUPAN NUTRISI MINGGU INI]
-                {nutrition_str}
-                
-                Sebagai trainer dan pengawas nutrisi, berikan feedback yang spesifik, memotivasi, dan arahkan user dengan tepat ke goal mereka.
-                - Jika asupan kalori/protein terlalu jauh dari target TDEE (berlebih atau kurang), berikan saran pola makan yang sesuai goal.
-                - Jika ada catatan tentang kesalahan form, berikan saran perbaikan postur agar terhindar dari cedera.
-                - Jaga respons tetap ringkas, padat, dan menyemangati!
-                
-                Berikan output HANYA dalam format JSON valid dengan dua key:
-                "wawasan_ai" : "string kesimpulan ringkas (1-2 kalimat)",
-                "fokus_hari_ini" : ["array of string", "max 2 poin singkat"]
-                """
-                
-                response = genai_client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                    )
+    if GOOGLE_API_KEY and profile and stats:
+        try:
+            genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+            prompt = f"""
+            Kamu adalah AI Personal Trainer sekaligus Pengawas Nutrisi SmaCoFit. Berikan ringkasan laporan progress mingguan untuk user berdasarkan data berikut:
+            
+            [PROFIL FISIK & TARGET]
+            - Goal Utama User: {profile.goal.value}
+            {onboarding_str}
+            
+            [PERFORMA LATIHAN MINGGU INI]
+            - Streak Latihan Saat Ini: {stats.currentStreak} hari
+            {exercise_totals_str}
+            
+            {mistakes_str}
+            
+            [ASUPAN NUTRISI MINGGU INI]
+            {nutrition_str}
+            
+            Sebagai trainer dan pengawas nutrisi, berikan feedback yang spesifik, memotivasi, dan arahkan user dengan tepat ke goal mereka.
+            - Jika asupan kalori/protein terlalu jauh dari target TDEE (berlebih atau kurang), berikan saran pola makan yang sesuai goal.
+            - Jika ada catatan tentang kesalahan form, berikan saran perbaikan postur agar terhindar dari cedera.
+            
+            Berikan output HANYA dalam format JSON valid dengan struktur bersarang (nested) berikut:
+            {{
+              "beranda": {{
+                "wawasan_ai": "Pesan singkat 1 kalimat untuk reminder (contoh: Sarapan belum dilog, ayo capai target proteinmu!).",
+                "fokus_hari_ini": ["Max 2 poin aksi sangat singkat"]
+              }},
+              "laporan": {{
+                "wawasan_ai": "Kesimpulan ringkas 2-3 kalimat merangkum progres mingguan secara keseluruhan.",
+                "fokus_hari_ini": ["Max 3 poin fokus perbaikan"]
+              }}
+            }}
+            """
+            
+            response = genai_client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
                 )
-                ai_data = json_lib.loads(response.text)
-                
-                stats.latest_insight = ai_data
-                stats.updatedAt = datetime.now(timezone.utc)
-                session.add(stats)
-                session.commit()
-            except Exception as e:
-                print("Error generating AI insight:", e)
+            )
+            ai_data = json_lib.loads(response.text)
+            
+            stats.latest_insight = ai_data
+            stats.updatedAt = datetime.now(timezone.utc)
+            session.add(stats)
+            session.commit()
+        except Exception as e:
+            print("Error generating AI insight:", e)

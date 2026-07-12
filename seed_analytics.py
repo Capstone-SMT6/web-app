@@ -39,7 +39,7 @@ def seed_data_for_user(email: str):
         last_active = None
         streak = 0
 
-        for i in range(6, -1, -1):
+        for i in range(29, -1, -1):
             log_date = today - timedelta(days=i)
             print(f"Seeding date: {log_date}")
 
@@ -50,6 +50,10 @@ def seed_data_for_user(email: str):
                 
             existing_workouts = session.exec(select(WorkoutSession).where(WorkoutSession.user_id == user.id, WorkoutSession.date == log_date)).all()
             for w in existing_workouts:
+                from models import ExerciseLog
+                existing_elogs = session.exec(select(ExerciseLog).where(ExerciseLog.session_id == w.id)).all()
+                for el in existing_elogs:
+                    session.delete(el)
                 session.delete(w)
                 
             existing_dailies = session.exec(select(DailyLog).where(DailyLog.user_id == user.id, DailyLog.date == log_date)).all()
@@ -110,6 +114,44 @@ def seed_data_for_user(email: str):
                     calories_burned=calories
                 )
                 session.add(w_session)
+                session.flush() # To get w_session.id
+                
+                # Create Exercise Logs
+                from models import Exercise, ExerciseLog
+                all_exercises = session.exec(select(Exercise)).all()
+                exercises_did = random.sample(all_exercises, random.randint(2, 4))
+                
+                for ex in exercises_did:
+                    name = ex.name.lower()
+                    reps = random.randint(10, 30) if 'plank' not in name else 0
+                    dur = random.randint(30, 120)
+                    
+                    fake_mistakes = {}
+                    if random.random() > 0.5: # 50% chance to have mistakes
+                        if 'push' in name:
+                            fake_mistakes["Punggung tidak lurus"] = random.randint(1, 3)
+                        elif 'sit' in name:
+                            fake_mistakes["Tidak naik penuh"] = random.randint(1, 3)
+                        elif 'squat' in name:
+                            fake_mistakes["Kedalaman squat kurang"] = random.randint(1, 3)
+                        elif 'plank' in name:
+                            fake_mistakes["Pinggul terlalu turun"] = random.randint(1, 3)
+                    
+                    e_log = ExerciseLog(
+                        session_id=w_session.id,
+                        exercise_id=ex.id,
+                        set_number=random.randint(2, 4),
+                        reps_completed=reps,
+                        duration_seconds=dur,
+                        is_manual_input=False,
+                        form_mistakes=fake_mistakes
+                    )
+                    session.add(e_log)
+                    
+                    if 'push' in name:
+                        total_pushups_added += (reps * e_log.set_number)
+                    if 'sit' in name:
+                        total_situps_added += (reps * e_log.set_number)
                 
                 # Daily Log
                 d_log = DailyLog(
@@ -119,9 +161,6 @@ def seed_data_for_user(email: str):
                 )
                 session.add(d_log)
                 
-                # Add to stats
-                total_pushups_added += random.randint(20, 100)
-                total_situps_added += random.randint(20, 100)
                 last_active = log_date
                 streak += 1
             else:
@@ -144,8 +183,6 @@ def seed_data_for_user(email: str):
             session.commit()
 
         # 4. Update Stats
-        stats.totalPushUps += total_pushups_added
-        stats.totalSitUps += total_situps_added
         if last_active:
             stats.lastActiveDate = last_active
         stats.currentStreak = streak
