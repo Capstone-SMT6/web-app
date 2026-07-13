@@ -1157,7 +1157,7 @@ def _generate_and_save_insight(user_id: str):
             
             Sebagai trainer dan pengawas nutrisi, berikan feedback yang spesifik, memotivasi, dan arahkan user dengan tepat ke goal mereka.
             - Jika asupan kalori/protein terlalu jauh dari target TDEE (berlebih atau kurang), berikan saran pola makan yang sesuai goal.
-            - Jika ada catatan tentang kesalahan form, berikan saran perbaikan postur agar terhindar dari cedera.
+            - Analisa juga Kesalahan form postur (jika ada). Hitung nilai skor (0-100) dan berikan Grade (A, B, C, D). 100 berarti tidak ada salah. Semakin banyak kesalahan, kurangi skornya.
             
             Berikan output HANYA dalam format JSON valid dengan struktur bersarang (nested) berikut:
             {{
@@ -1168,6 +1168,11 @@ def _generate_and_save_insight(user_id: str):
               "laporan": {{
                 "wawasan_ai": "Kesimpulan ringkas 2-3 kalimat merangkum progres mingguan secara keseluruhan.",
                 "fokus_hari_ini": ["Max 3 poin fokus perbaikan"]
+              }},
+              "analisa_workout": {{
+                "score": 85.0,
+                "grade": "B",
+                "message": "Feedback singkat 1-2 kalimat untuk memperbaiki kesalahan form terbanyak, atau pujian jika sempurna."
               }}
             }}
             """

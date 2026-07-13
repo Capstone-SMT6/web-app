@@ -189,9 +189,15 @@ class InsightSection(BaseModel):
     wawasan_ai: str
     fokus_hari_ini: List[str]
 
+class WorkoutAnalysisInsight(BaseModel):
+    score: float
+    grade: str
+    message: str
+
 class InsightsModel(BaseModel):
     beranda: InsightSection
     laporan: InsightSection
+    analisa_workout: Optional[WorkoutAnalysisInsight] = None
 
 class DashboardReportResponse(BaseModel):
     insights: InsightsModel

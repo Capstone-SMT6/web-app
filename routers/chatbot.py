@@ -239,8 +239,10 @@ async def chat(
         db_messages = db.exec(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id)
-            .order_by(ChatMessage.createdAt)
+            .order_by(ChatMessage.createdAt.desc())
+            .limit(20)
         ).all()
+        db_messages = list(reversed(db_messages))
         history = build_history(db_messages)
         user_msg = ChatMessage(
             session_id=session_id,
@@ -306,8 +308,10 @@ async def chat_stream(
     db_messages = db.exec(
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.createdAt)
+        .order_by(ChatMessage.createdAt.desc())
+        .limit(20)
     ).all()
+    db_messages = list(reversed(db_messages))
     history = build_history(db_messages)
     user_msg = ChatMessage(session_id=session_id, role="user", text=req.message)
     db.add(user_msg)

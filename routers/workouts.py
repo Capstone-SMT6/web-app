@@ -1,12 +1,12 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from sqlmodel import Session, select
 from database import get_session
 from models import WorkoutSession, ExerciseLog, DailyLog, UserStats, UserFitnessProfile, DayTypeEnum
-from routers.users import get_current_user, User
+from routers.users import get_current_user, User, _generate_and_save_insight
 from services.plan_generator import generate_plan, get_active_plan
 
 router = APIRouter(prefix="/api/workouts", tags=["workouts"])
@@ -85,6 +85,7 @@ def _recalculate_streak(user_id: str, session: Session) -> None:
 @router.post("/sessions", status_code=201)
 def start_workout_session(
     body: StartWorkoutRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -162,6 +163,9 @@ def start_workout_session(
 
     # 5. Hitung ulang streak setelah commit
     _recalculate_streak(current_user.id, session)
+
+    # 6. Generate AI insight di background agar Analisa Workout selalu update
+    background_tasks.add_task(_generate_and_save_insight, current_user.id)
 
     return {
         "message": "Workout session saved!",
@@ -304,40 +308,8 @@ def analytics_summary(
         "message": "Kamu belum merekam latihan dengan AI. Gunakan kamera SmaCoFit untuk mendapatkan analisa otomatis form postur tubuhmu."
     }
     
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    if GOOGLE_API_KEY and total_mistakes:
-        try:
-            genai_client = genai.Client(api_key=GOOGLE_API_KEY)
-            top_mistakes = sorted(total_mistakes.items(), key=lambda x: x[1], reverse=True)[:5]
-            mistakes_str = "\n".join([f"- {m}: {c} kali" for m, c in top_mistakes])
-            
-            prompt = f"""
-            Kamu adalah pelatih kebugaran. Evaluasi performa latihan user ini berdasarkan akumulasi data kesalahan form yang terdeteksi sensor SmaCoFit:
-            
-            KESALAHAN FORM POSTUR:
-            {mistakes_str}
-            
-            Nilai total skor (0-100) dan berikan Grade (A, B, C, D). 100 berarti tidak ada salah. Semakin banyak kesalahan, kurangi skornya.
-            Berikan feedback singkat, 1-2 kalimat untuk memperbaiki kesalahan tersebut.
-            
-            JSON format:
-            "score": <angka_float>,
-            "grade": "<huruf>",
-            "message": "<string_pesan>"
-            """
-            response = genai_client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            parsed_insight = json_lib.loads(response.text)
-            ai_insight["score"] = float(parsed_insight.get("score", 85.0))
-            ai_insight["grade"] = parsed_insight.get("grade", "B")
-            ai_insight["message"] = parsed_insight.get("message", "Sesi latihan terekam.")
-        except Exception as e:
-            print("Error generating workout insight:", e)
-    elif all_session_ids and not total_mistakes:
-        ai_insight["message"] = "Form latihanmu sangat baik! Tidak ada kesalahan postur kritis yang tercatat oleh AI."
+    if stats and stats.latest_insight and isinstance(stats.latest_insight, dict):
+        ai_insight = stats.latest_insight.get("analisa_workout") or ai_insight
 
     return {
         "total_workouts": total_workouts,
