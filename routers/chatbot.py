@@ -78,17 +78,17 @@ class MessageResponse(BaseModel):
 router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def embed_query(text: str) -> list[float]:
-    response = genai_client.models.embed_content(
+async def embed_query(text: str) -> list[float]:
+    response = await genai_client.aio.models.embed_content(
         model=EMBEDDING_MODEL,
         contents=text,
         config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
     )
     return response.embeddings[0].values
 
-def retrieve(query: str, db: Session) -> tuple[str, list[str]]:
+async def retrieve(query: str, db: Session) -> tuple[str, list[str]]:
     """Return (context_block, list_of_source_labels)."""
-    query_embedding = embed_query(query)
+    query_embedding = await embed_query(query)
     stmt = (
         select(RAGKnowledge)
         .order_by(RAGKnowledge.embedding.cosine_distance(query_embedding))
@@ -235,7 +235,7 @@ async def chat(
     if not chat_session or chat_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
     try:
-        context, sources = retrieve(req.message, db)
+        context, sources = await retrieve(req.message, db)
         db_messages = db.exec(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id)
@@ -256,7 +256,7 @@ async def chat(
             db.add(chat_session)
 
         user_ctx = _build_user_context(current_user.id, db)
-        response = genai_client.models.generate_content(
+        response = await genai_client.aio.models.generate_content(
             model=CHAT_MODEL,
             contents=history + [
                 types.Content(role="user", parts=[types.Part(text=req.message)])
@@ -302,7 +302,7 @@ async def chat_stream(
     if not chat_session or chat_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found.")
     try:
-        context, sources = retrieve(req.message, db)
+        context, sources = await retrieve(req.message, db)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     db_messages = db.exec(
@@ -323,13 +323,13 @@ async def chat_stream(
 
     db.commit()
 
-    def generate():
+    async def generate():
         yield f"data: {json_lib.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
         full_answer = []
         user_ctx = _build_user_context(current_user.id, db)
         try:
-            for chunk in genai_client.models.generate_content_stream(
+            stream_response = await genai_client.aio.models.generate_content_stream(
                 model=CHAT_MODEL,
                 contents=history + [
                     types.Content(role="user", parts=[types.Part(text=req.message)])
@@ -337,7 +337,8 @@ async def chat_stream(
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT.format(context=context, user_context=user_ctx),
                 ),
-            ):
+            )
+            async for chunk in stream_response:
                 if chunk.text:
                     full_answer.append(chunk.text)
                     yield f"data: {json_lib.dumps({'type': 'chunk', 'text': chunk.text})}\n\n"
