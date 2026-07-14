@@ -1178,7 +1178,7 @@ def _generate_and_save_insight(user_id: str):
             """
             
             response = genai_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
