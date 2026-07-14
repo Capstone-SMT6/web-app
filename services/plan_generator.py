@@ -393,7 +393,7 @@ The following days MUST be rest days (is_rest_day=true) and have an empty exerci
 All other days MUST be active days (is_rest_day=false) and contain exercises.
 """
     response = client.models.generate_content(
-        model="gemini-flash-latest",
+        model="gemini-2.5-flash-lite",
         contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json")
     )

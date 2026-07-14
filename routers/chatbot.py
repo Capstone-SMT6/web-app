@@ -31,7 +31,7 @@ load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "models/gemini-embedding-001"
-CHAT_MODEL      = "gemini-flash-latest"
+CHAT_MODEL      = "gemini-2.5-flash-lite"
 TOP_K           = 5
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
