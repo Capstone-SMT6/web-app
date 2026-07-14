@@ -446,7 +446,7 @@ def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
         from mail_helper import send_otp_email
         send_otp_email(request.email, code, request.purpose)
     except Exception as e:
-        print(f"Failed to send email (probably Resend free tier issue). The OTP is: {code}")
+        print(f"Failed to send email (probably SMTP configuration issue: {e}). The OTP is: {code}")
         # We don't raise an error here so the app can continue to the OTP screen
 
     return {"message": "OTP sent successfully"}

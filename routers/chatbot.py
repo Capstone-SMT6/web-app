@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 from dotenv import load_dotenv
 
-from database import get_session
+from database import get_session, engine
 from models import User, ChatSession, ChatMessage, RAGKnowledge, UserFitnessProfile, UserStats, WorkoutSession
 from routers.users import get_current_user
 
@@ -321,13 +321,13 @@ async def chat_stream(
         chat_session.updatedAt = datetime.now(timezone.utc)
         db.add(chat_session)
 
+    user_ctx = _build_user_context(current_user.id, db)
     db.commit()
 
     async def generate():
         yield f"data: {json_lib.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
         full_answer = []
-        user_ctx = _build_user_context(current_user.id, db)
         try:
             stream_response = await genai_client.aio.models.generate_content_stream(
                 model=CHAT_MODEL,
@@ -346,14 +346,20 @@ async def chat_stream(
         except Exception as e:
             yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
             return
-        model_msg = ChatMessage(
-            session_id=session_id,
-            role="model",
-            text="".join(full_answer),
-            sources=json_lib.dumps(sources),
-        )
-        db.add(model_msg)
-        db.commit()
+
+        try:
+            with Session(engine) as gen_db:
+                model_msg = ChatMessage(
+                    session_id=session_id,
+                    role="model",
+                    text="".join(full_answer),
+                    sources=json_lib.dumps(sources),
+                )
+                gen_db.add(model_msg)
+                gen_db.commit()
+        except Exception as e:
+            yield f"data: {json_lib.dumps({'type': 'error', 'message': f'Database save error: {str(e)}'})}\n\n"
+            return
 
         yield f"data: {json_lib.dumps({'type': 'done'})}\n\n"
 

@@ -125,6 +125,8 @@ class UserStats(SQLModel, table=True):
     currentStreak: int = Field(default=0, sa_column_kwargs={"name": "current_streak"})
     longestStreak: int = Field(default=0, sa_column_kwargs={"name": "longest_streak"})
     lastActiveDate: Optional[date] = Field(default=None, sa_column_kwargs={"name": "last_active_date"})
+    totalPushUps: int = Field(default=0, sa_column_kwargs={"name": "total_push_ups"})
+    totalSitUps: int = Field(default=0, sa_column_kwargs={"name": "total_sit_ups"})
     latest_insight: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     updatedAt: datetime = Field(default_factory=now_utc, sa_column_kwargs={"name": "updated_at"})
 

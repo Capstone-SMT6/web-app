@@ -1,16 +1,42 @@
 import os
-import resend
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def send_otp_email(to_email: str, code: str, purpose: str):
     """
-    Sends an OTP code via Resend API.
+    Sends an OTP code via SMTP.
     """
-    resend.api_key = os.getenv("RESEND_API_KEY")
-    from_email = os.getenv("RESEND_FROM_EMAIL", "SmacoFit <onboarding@resend.dev>")
+    smtp_username = os.getenv("SMTP_EMAIL")
+    smtp_password = os.getenv("SMTP_PASSWORD")
 
-    if not resend.api_key:
-        raise Exception("RESEND_API_KEY is not set in environment variables")
+    if not smtp_username or not smtp_password:
+        raise Exception("SMTP_EMAIL or SMTP_PASSWORD is not set in environment variables")
+
+    # Determine SMTP Host
+    smtp_host = os.getenv("SMTP_HOST")
+    if not smtp_host:
+        if "@gmail.com" in smtp_username.lower():
+            smtp_host = "smtp.gmail.com"
+        else:
+            smtp_host = "localhost"
+
+    # Determine SMTP Port
+    smtp_port_str = os.getenv("SMTP_PORT")
+    if smtp_port_str:
+        try:
+            smtp_port = int(smtp_port_str)
+        except ValueError:
+            smtp_port = 587
+    else:
+        smtp_port = 587
+
+    smtp_from_email = os.getenv("SMTP_FROM_EMAIL", smtp_username)
+    smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
 
     subject = "Verify your account" if purpose == "register" else "Reset your password"
     title_text = "Welcome to SmacoFit!" if purpose == "register" else "Reset Password Request"
@@ -31,11 +57,22 @@ def send_otp_email(to_email: str, code: str, purpose: str):
     </div>
     """
 
-    params: resend.Emails.SendParams = {
-        "from": from_email,
-        "to": [to_email],
-        "subject": subject,
-        "html": html_content,
-    }
+    message = MIMEMultipart("alternative")
+    message["Subject"] = subject
+    message["From"] = smtp_from_email
+    message["To"] = to_email
 
-    resend.Emails.send(params)
+    text_content = f"{body_text}\n\n{code}\n\nThis code is valid for 10 minutes."
+    message.attach(MIMEText(text_content, "plain"))
+    message.attach(MIMEText(html_content, "html"))
+
+    # Connect and send
+    server = smtplib.SMTP(smtp_host, smtp_port)
+    try:
+        if smtp_use_tls:
+            server.starttls()
+        server.login(smtp_username, smtp_password)
+        server.sendmail(smtp_from_email, [to_email], message.as_string())
+    finally:
+        server.quit()
+
