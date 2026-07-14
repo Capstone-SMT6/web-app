@@ -256,17 +256,88 @@ async def chat(
             db.add(chat_session)
 
         user_ctx = _build_user_context(current_user.id, db)
-        response = await genai_client.aio.models.generate_content(
-            model=CHAT_MODEL,
-            contents=history + [
-                types.Content(role="user", parts=[types.Part(text=req.message)])
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT.format(context=context, user_context=user_ctx),
-            ),
-        )
+        answer = None
+        gemini_err = None
 
-        answer = response.text
+        # 1. Try Gemini
+        try:
+            response = await genai_client.aio.models.generate_content(
+                model=CHAT_MODEL,
+                contents=history + [
+                    types.Content(role="user", parts=[types.Part(text=req.message)])
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT.format(context=context, user_context=user_ctx),
+                ),
+            )
+            answer = response.text
+        except Exception as e:
+            gemini_err = e
+            print(f"Gemini chat failed: {gemini_err}. Trying competitor fallbacks...")
+
+        # 2. Try Groq
+        if not answer:
+            groq_key = os.getenv("GROQ_API_KEY")
+            if groq_key:
+                try:
+                    print("Trying Groq fallback in chat...")
+                    import httpx
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context, user_context=user_ctx)}]
+                    for msg in db_messages:
+                        role = "assistant" if msg.role == "model" else "user"
+                        messages.append({"role": role, "content": msg.text})
+                    messages.append({"role": "user", "content": req.message})
+                    
+                    async with httpx.AsyncClient() as client:
+                        response_json = await client.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                            json={
+                                "model": "llama-3.3-70b-versatile",
+                                "messages": messages
+                            },
+                            timeout=30.0
+                        )
+                        if response_json.status_code == 200:
+                            answer = response_json.json()["choices"][0]["message"]["content"]
+                except Exception as groq_err:
+                    print(f"Groq chat failed: {groq_err}")
+
+        # 3. Try OpenAI
+        if not answer:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if openai_key:
+                try:
+                    print("Trying OpenAI fallback in chat...")
+                    import httpx
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context, user_context=user_ctx)}]
+                    for msg in db_messages:
+                        role = "assistant" if msg.role == "model" else "user"
+                        messages.append({"role": role, "content": msg.text})
+                    messages.append({"role": "user", "content": req.message})
+                    
+                    async with httpx.AsyncClient() as client:
+                        response_json = await client.post(
+                            "https://api.openai.com/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                            json={
+                                "model": "gpt-4o-mini",
+                                "messages": messages
+                            },
+                            timeout=30.0
+                        )
+                        if response_json.status_code == 200:
+                            answer = response_json.json()["choices"][0]["message"]["content"]
+                except Exception as openai_err:
+                    print(f"OpenAI chat failed: {openai_err}")
+
+        if not answer:
+            error_msg = str(gemini_err)
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                friendly_detail = "Maaf, AI Trainer sedang mencapai batas kuota harian. Silakan coba beberapa saat lagi!"
+            else:
+                friendly_detail = "Maaf, terjadi kesalahan koneksi pada AI Trainer. Silakan coba lagi nanti."
+            raise HTTPException(status_code=500, detail=friendly_detail)
 
         model_msg = ChatMessage(
             session_id=session_id,
@@ -279,6 +350,8 @@ async def chat(
 
         return ChatResponse(answer=answer, sources=sources, session_id=session_id)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -328,6 +401,10 @@ async def chat_stream(
         yield f"data: {json_lib.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
         full_answer = []
+        gemini_success = False
+        gemini_err = None
+
+        # 1. Try Gemini Stream
         try:
             stream_response = await genai_client.aio.models.generate_content_stream(
                 model=CHAT_MODEL,
@@ -342,9 +419,106 @@ async def chat_stream(
                 if chunk.text:
                     full_answer.append(chunk.text)
                     yield f"data: {json_lib.dumps({'type': 'chunk', 'text': chunk.text})}\n\n"
-
+            gemini_success = True
         except Exception as e:
-            yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            gemini_err = e
+            print(f"Gemini stream failed: {gemini_err}. Trying competitor fallbacks...")
+
+        # 2. Try Groq Stream
+        if not gemini_success:
+            groq_key = os.getenv("GROQ_API_KEY")
+            if groq_key:
+                try:
+                    print("Trying Groq fallback stream...")
+                    import httpx
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context, user_context=user_ctx)}]
+                    for msg in db_messages:
+                        role = "assistant" if msg.role == "model" else "user"
+                        messages.append({"role": role, "content": msg.text})
+                    messages.append({"role": "user", "content": req.message})
+                    
+                    async with httpx.AsyncClient() as client:
+                        async with client.stream(
+                            "POST",
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                            json={
+                                "model": "llama-3.3-70b-versatile",
+                                "messages": messages,
+                                "stream": True
+                            },
+                            timeout=30.0
+                        ) as r:
+                            if r.status_code == 200:
+                                async for line in r.aiter_lines():
+                                    line = line.strip()
+                                    if line.startswith("data: "):
+                                        data_str = line[6:].strip()
+                                        if data_str == "[DONE]":
+                                            break
+                                        try:
+                                            chunk_json = json_lib.loads(data_str)
+                                            delta_content = chunk_json["choices"][0]["delta"].get("content", "")
+                                            if delta_content:
+                                                full_answer.append(delta_content)
+                                                yield f"data: {json_lib.dumps({'type': 'chunk', 'text': delta_content})}\n\n"
+                                        except Exception:
+                                            pass
+                                gemini_success = True
+                except Exception as groq_err:
+                    print(f"Groq stream failed: {groq_err}")
+
+        # 3. Try OpenAI Stream
+        if not gemini_success:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if openai_key:
+                try:
+                    print("Trying OpenAI fallback stream...")
+                    import httpx
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context, user_context=user_ctx)}]
+                    for msg in db_messages:
+                        role = "assistant" if msg.role == "model" else "user"
+                        messages.append({"role": role, "content": msg.text})
+                    messages.append({"role": "user", "content": req.message})
+                    
+                    async with httpx.AsyncClient() as client:
+                        async with client.stream(
+                            "POST",
+                            "https://api.openai.com/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                            json={
+                                "model": "gpt-4o-mini",
+                                "messages": messages,
+                                "stream": True
+                            },
+                            timeout=30.0
+                        ) as r:
+                            if r.status_code == 200:
+                                async for line in r.aiter_lines():
+                                    line = line.strip()
+                                    if line.startswith("data: "):
+                                        data_str = line[6:].strip()
+                                        if data_str == "[DONE]":
+                                            break
+                                        try:
+                                            chunk_json = json_lib.loads(data_str)
+                                            delta_content = chunk_json["choices"][0]["delta"].get("content", "")
+                                            if delta_content:
+                                                full_answer.append(delta_content)
+                                                yield f"data: {json_lib.dumps({'type': 'chunk', 'text': delta_content})}\n\n"
+                                        except Exception:
+                                            pass
+                                gemini_success = True
+                except Exception as openai_err:
+                    print(f"OpenAI stream failed: {openai_err}")
+
+        if not gemini_success:
+            error_msg = str(gemini_err)
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                friendly_detail = "Maaf, AI Trainer sedang mencapai batas kuota harian. Silakan coba beberapa saat lagi!"
+            else:
+                friendly_detail = "Maaf, terjadi kesalahan koneksi pada AI Trainer. Silakan coba lagi nanti."
+            yield f"data: {json_lib.dumps({'type': 'error', 'message': friendly_detail})}\n\n"
             return
 
         try:

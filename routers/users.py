@@ -1177,14 +1177,72 @@ def _generate_and_save_insight(user_id: str):
             }}
             """
             
-            response = genai_client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                )
-            )
-            ai_data = json_lib.loads(response.text)
+            models_to_try = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]
+            response = None
+            last_error = None
+            for model_name in models_to_try:
+                try:
+                    response = genai_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                        )
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    print(f"Model {model_name} failed in insight generation: {e}. Trying next...")
+            
+            ai_data = None
+            if response is not None:
+                ai_data = json_lib.loads(response.text)
+            else:
+                # Try Groq
+                groq_key = os.getenv("GROQ_API_KEY")
+                if groq_key:
+                    try:
+                        print("Trying Groq fallback in insight generation...")
+                        import httpx
+                        response_json = httpx.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                            json={
+                                "model": "llama-3.3-70b-versatile",
+                                "messages": [{"role": "user", "content": prompt}],
+                                "response_format": {"type": "json_object"}
+                            },
+                            timeout=30.0
+                        )
+                        if response_json.status_code == 200:
+                            ai_data = json_lib.loads(response_json.json()["choices"][0]["message"]["content"])
+                    except Exception as groq_err:
+                        print(f"Groq insight generation failed: {groq_err}")
+
+                # Try OpenAI
+                if ai_data is None:
+                    openai_key = os.getenv("OPENAI_API_KEY")
+                    if openai_key:
+                        try:
+                            print("Trying OpenAI fallback in insight generation...")
+                            import httpx
+                            response_json = httpx.post(
+                                "https://api.openai.com/v1/chat/completions",
+                                headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                                json={
+                                    "model": "gpt-4o-mini",
+                                    "messages": [{"role": "user", "content": prompt}],
+                                    "response_format": {"type": "json_object"}
+                                },
+                                timeout=30.0
+                            )
+                            if response_json.status_code == 200:
+                                ai_data = json_lib.loads(response_json.json()["choices"][0]["message"]["content"])
+                        except Exception as openai_err:
+                            print(f"OpenAI insight generation failed: {openai_err}")
+
+            if ai_data is None:
+                raise last_error
             
             stats.latest_insight = ai_data
             stats.updatedAt = datetime.now(timezone.utc)

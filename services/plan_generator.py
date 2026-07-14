@@ -392,19 +392,88 @@ The days of the week are 0 (Monday) to 6 (Sunday).
 The following days MUST be rest days (is_rest_day=true) and have an empty exercises array: {list(rest_indices)}.
 All other days MUST be active days (is_rest_day=false) and contain exercises.
 """
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
-    )
-    raw_text = response.text.strip()
-    if raw_text.startswith("```json"):
-        raw_text = raw_text[7:]
-    elif raw_text.startswith("```"):
-        raw_text = raw_text[3:]
-    if raw_text.endswith("```"):
-        raw_text = raw_text[:-3]
-    return json.loads(raw_text.strip())
+    models_to_try = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]
+    response = None
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            break
+        except Exception as e:
+            last_error = e
+            print(f"Model {model_name} failed in plan generation: {e}. Trying next...")
+            
+    if response is not None:
+        raw_text = response.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:]
+        elif raw_text.startswith("```"):
+            raw_text = raw_text[3:]
+        if raw_text.endswith("```"):
+            raw_text = raw_text[:-3]
+        return json.loads(raw_text.strip())
+
+    # Fallback to Groq
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key:
+        try:
+            print("Trying Groq fallback in plan generation...")
+            import httpx
+            response_json = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=30.0
+            )
+            if response_json.status_code == 200:
+                raw_text = response_json.json()["choices"][0]["message"]["content"].strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[7:]
+                elif raw_text.startswith("```"):
+                    raw_text = raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                return json.loads(raw_text.strip())
+        except Exception as groq_err:
+            print(f"Groq plan generation failed: {groq_err}")
+
+    # Fallback to OpenAI
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        try:
+            print("Trying OpenAI fallback in plan generation...")
+            import httpx
+            response_json = httpx.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=30.0
+            )
+            if response_json.status_code == 200:
+                raw_text = response_json.json()["choices"][0]["message"]["content"].strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[7:]
+                elif raw_text.startswith("```"):
+                    raw_text = raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                return json.loads(raw_text.strip())
+        except Exception as openai_err:
+            print(f"OpenAI plan generation failed: {openai_err}")
+
+    raise last_error
 
 
 
