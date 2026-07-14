@@ -83,7 +83,11 @@ _DAYS_MAP = {
 
 
 def _days_per_week(intensity: str) -> int:
-    return _DAYS_MAP.get(intensity, 4)
+    try:
+        enum_val = IntensityEnum(intensity)
+    except ValueError:
+        enum_val = IntensityEnum.medium
+    return _DAYS_MAP.get(enum_val, 4)
 
 
 # ── Rest-day placement ─────────────────────────────────────────────────────
@@ -232,7 +236,7 @@ def _generate_plan_rule_based(profile: UserFitnessProfile, active_days: int, eli
 
 # ── Main generator ─────────────────────────────────────────────────────────
 
-def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: List[str] = None, applied_constraints: List[str] = None) -> ExercisePlan:
+def generate_plan(profile: UserFitnessProfile, session: Session, selected_days: Optional[List[str]] = None, applied_constraints: Optional[List[str]] = None) -> ExercisePlan:
     """
     Generate a complete weekly ExercisePlan for the given profile.
     Persists ExercisePlan, PlanDay, and PlanDayExercise rows.
@@ -407,7 +411,7 @@ All other days MUST be active days (is_rest_day=false) and contain exercises.
             last_error = e
             print(f"Model {model_name} failed in plan generation: {e}. Trying next...")
             
-    if response is not None:
+    if response is not None and response.text:
         raw_text = response.text.strip()
         if raw_text.startswith("```json"):
             raw_text = raw_text[7:]
@@ -473,7 +477,9 @@ All other days MUST be active days (is_rest_day=false) and contain exercises.
         except Exception as openai_err:
             print(f"OpenAI plan generation failed: {openai_err}")
 
-    raise last_error
+    if last_error:
+        raise last_error
+    raise RuntimeError("Plan generation failed across all primary and fallback endpoints.")
 
 
 
@@ -501,7 +507,7 @@ def get_active_plan(user_id: str, session: Session) -> Optional[dict]:
         return None
 
     days = session.exec(
-        select(PlanDay).where(PlanDay.plan_id == plan.id).order_by(PlanDay.day_of_week)
+        select(PlanDay).where(PlanDay.plan_id == plan.id).order_by(PlanDay.day_of_week)  # type: ignore
     ).all()
 
     # Determine default rest seconds based on difficulty
@@ -513,7 +519,7 @@ def get_active_plan(user_id: str, session: Session) -> Optional[dict]:
         exercises_raw = session.exec(
             select(PlanDayExercise)
             .where(PlanDayExercise.plan_day_id == day.id)
-            .order_by(PlanDayExercise.order)
+            .order_by(PlanDayExercise.order)  # type: ignore
         ).all()
 
         exercises = []
