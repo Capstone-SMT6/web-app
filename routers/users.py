@@ -2,7 +2,7 @@ from typing import List, Any, cast
 import jwt
 import random
 from datetime import date, datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordBearer
 from limiter import limiter
 from sqlmodel import Session, select, desc, col
@@ -424,9 +424,22 @@ async def google_login(request: Request, data: GoogleLoginRequest, session: Sess
 # OTP Routes
 # ---------------------------------------------------------------------------
 
+def send_otp_email_background(email: str, code: str, purpose: str):
+    try:
+        from mail_helper import send_otp_email
+        send_otp_email(email, code, purpose)
+    except Exception as e:
+        print(f"Failed to send email (probably SMTP configuration issue: {e}). The OTP is: {code}")
+
+
 @router.post("/otp/send")
 @limiter.limit("5/15 minutes")
-def send_otp(request: Request, payload: OTPSendRequest, session: Session = Depends(get_session)):
+def send_otp(
+    request: Request,
+    payload: OTPSendRequest,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+):
     if payload.purpose == "reset_password":
         user = session.exec(select(User).where(User.email == payload.email)).first()
         if not user:
@@ -448,12 +461,7 @@ def send_otp(request: Request, payload: OTPSendRequest, session: Session = Depen
     session.add(otp_record)
     session.commit()
 
-    try:
-        from mail_helper import send_otp_email
-        send_otp_email(payload.email, code, payload.purpose)
-    except Exception as e:
-        print(f"Failed to send email (probably SMTP configuration issue: {e}). The OTP is: {code}")
-        # We don't raise an error here so the app can continue to the OTP screen
+    background_tasks.add_task(send_otp_email_background, payload.email, code, payload.purpose)
 
     return {"message": "OTP sent successfully"}
 

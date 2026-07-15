@@ -67,12 +67,15 @@ def send_otp_email(to_email: str, code: str, purpose: str):
     message.attach(MIMEText(html_content, "html"))
 
     # Connect and send
-    server = smtplib.SMTP(smtp_host, smtp_port)
+    server = smtplib.SMTP(smtp_host, smtp_port, timeout=10.0)
     try:
         if smtp_use_tls:
             server.starttls()
         server.login(smtp_username, smtp_password)
         server.sendmail(smtp_from_email, [to_email], message.as_string())
     finally:
-        server.quit()
+        try:
+            server.quit()
+        except Exception:
+            pass
 
