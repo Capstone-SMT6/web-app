@@ -1,24 +1,13 @@
 from fastapi.testclient import TestClient
+from sqlmodel import Session
+from tests.test_users import create_test_user_helper
 import pytest
 
-def setup_admin_user(client: TestClient):
-    # First, try to create an admin user via standard users endpoint.
-    # Note: the users create endpoint doesn't allow setting is_admin,
-    # so we might need a workaround or test the normal user access first.
-    # We will simulate an admin login by inserting directly into DB or 
-    # relying on the test structure. For now, let's create a standard user
-    # and expect 403 when they try to access admin endpoints.
-    client.post(
-        "/api/users/",
-        json={
-            "username": "notadmin",
-            "email": "notadmin@example.com",
-            "password": "password123"
-        }
-    )
+def setup_admin_user(client: TestClient, session: Session):
+    create_test_user_helper(client, session, "notadmin", "notadmin@example.com", "password123")
     
-def test_admin_api_login_unauthorized(client: TestClient):
-    setup_admin_user(client)
+def test_admin_api_login_unauthorized(client: TestClient, session: Session):
+    setup_admin_user(client, session)
     
     # Try logging into admin with normal user credentials
     response = client.post(

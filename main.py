@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routers import users, chatbot, admin, trends, nutrition, workouts
 
@@ -8,6 +8,59 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https://cdn.jsdelivr.net;"
+    )
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from limiter import limiter
+from fastapi.responses import JSONResponse
+import time
+
+async def custom_rate_limit_handler(request: Request, exc: Exception):
+    current_limit = getattr(request.state, "view_rate_limit", None)
+    detail = getattr(exc, "detail", "Too many requests")
+    
+    response = JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit exceeded. Please try again later.", "error": detail}
+    )
+    
+    if current_limit and hasattr(request.app.state, "limiter"):
+        limiter_obj = request.app.state.limiter
+        try:
+            window_stats = limiter_obj.limiter.get_window_stats(current_limit[0], *current_limit[1])
+            reset_in = 1 + window_stats[0]
+            retry_after_secs = max(1, int(reset_in - time.time()))
+            response.headers["Retry-After"] = str(retry_after_secs)
+            response.headers["X-RateLimit-Limit"] = str(current_limit[0].amount)
+            response.headers["X-RateLimit-Remaining"] = "0"
+            response.headers["X-RateLimit-Reset"] = str(int(reset_in))
+        except Exception as e:
+            response.headers["Retry-After"] = "60"
+    else:
+        response.headers["Retry-After"] = "60"
+        
+    return response
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, custom_rate_limit_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_exception_handler(admin.ExceptionRequiresRedirect, admin.redirect_handler)
 
 import os

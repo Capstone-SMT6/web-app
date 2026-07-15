@@ -4,7 +4,7 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from pydantic import BaseModel
 import jwt
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from routers.users import verify_password, create_access_token, SECRET_KEY, ALGORITHM
 from database import get_session
@@ -21,7 +21,7 @@ templates = Jinja2Templates(directory="templates")
 class ExceptionRequiresRedirect(Exception):
     pass
 
-async def redirect_handler(request: Request, exc: ExceptionRequiresRedirect):
+async def redirect_handler(request: Request, exc: Exception):
     return RedirectResponse(url="/admin/login", status_code=303)
 
 def get_admin_user(request: Request, session: Session = Depends(get_session)):
@@ -30,9 +30,10 @@ def get_admin_user(request: Request, session: Session = Depends(get_session)):
     if not token:
         raise ExceptionRequiresRedirect()
     try:
+        assert SECRET_KEY is not None
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if not email:
+        email = payload.get("sub")
+        if email is None or not isinstance(email, str):
             raise ExceptionRequiresRedirect()
         user = session.exec(select(User).where(User.email == email)).first()
         if not user or not user.is_admin:
@@ -48,9 +49,10 @@ def get_admin_user_api(request: Request, session: Session = Depends(get_session)
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = auth_header.split(" ", 1)[1]
     try:
+        assert SECRET_KEY is not None
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if not email:
+        email = payload.get("sub")
+        if email is None or not isinstance(email, str):
             raise HTTPException(status_code=401, detail="Invalid token")
         user = session.exec(select(User).where(User.email == email)).first()
         if not user or not user.is_admin:

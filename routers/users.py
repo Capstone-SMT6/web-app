@@ -1,10 +1,12 @@
-from typing import List
+from typing import List, Any, cast
 import jwt
 import random
 from datetime import date, datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
 from fastapi.security import OAuth2PasswordBearer
-from sqlmodel import Session, select
+from limiter import limiter
+from sqlmodel import Session, select, desc, col
+from sqlalchemy import select as sa_select
 from models import (
     DailyLog,
     DifficultyLevelEnum,
@@ -64,7 +66,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
-def create_access_token(data: dict, expires_delta: timedelta = None):
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
@@ -83,8 +85,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Dep
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
+        email = payload.get("sub")
+        if email is None or not isinstance(email, str):
             raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception
@@ -300,7 +302,8 @@ def _exercise_targets_for_day(
 
 
 @router.post("/", response_model=User)
-def create_user(user: UserCreate, session: Session = Depends(get_session)):
+@limiter.limit("5/15 minutes")
+def create_user(request: Request, user: UserCreate, session: Session = Depends(get_session)):
     existing = session.exec(select(User).where(User.email == user.email)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -310,11 +313,11 @@ def create_user(user: UserCreate, session: Session = Depends(get_session)):
         .where(OTPVerification.email == user.email)
         .where(OTPVerification.purpose == "register")
         .where(OTPVerification.verifiedAt != None)
-        .order_by(OTPVerification.verifiedAt.desc())
+        .order_by(desc(OTPVerification.verifiedAt))
     ).first()
 
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    if not otp_verified or otp_verified.verifiedAt.replace(tzinfo=None) < now_utc - timedelta(minutes=15):
+    if not otp_verified or otp_verified.verifiedAt is None or otp_verified.verifiedAt.replace(tzinfo=None) < now_utc - timedelta(minutes=15):
         raise HTTPException(status_code=400, detail="Email is not verified via OTP")
 
     hashed_password = get_password_hash(user.password)
@@ -332,7 +335,8 @@ def create_user(user: UserCreate, session: Session = Depends(get_session)):
 
 
 @router.post("/login")
-def login_user(user: UserLogin, session: Session = Depends(get_session)):
+@limiter.limit("5/15 minutes")
+def login_user(request: Request, user: UserLogin, session: Session = Depends(get_session)):
     db_user = session.exec(select(User).where(User.email == user.email)).first()
     if not db_user or not db_user.password or not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -345,7 +349,8 @@ def login_user(user: UserLogin, session: Session = Depends(get_session)):
 
 
 @router.post("/google-login")
-async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_session)):
+@limiter.limit("5/15 minutes")
+async def google_login(request: Request, data: GoogleLoginRequest, session: Session = Depends(get_session)):
     import httpx
 
     async def upload_google_photo(google_url: str) -> str | None:
@@ -420,13 +425,14 @@ async def google_login(data: GoogleLoginRequest, session: Session = Depends(get_
 # ---------------------------------------------------------------------------
 
 @router.post("/otp/send")
-def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
-    if request.purpose == "reset_password":
-        user = session.exec(select(User).where(User.email == request.email)).first()
+@limiter.limit("5/15 minutes")
+def send_otp(request: Request, payload: OTPSendRequest, session: Session = Depends(get_session)):
+    if payload.purpose == "reset_password":
+        user = session.exec(select(User).where(User.email == payload.email)).first()
         if not user:
             raise HTTPException(status_code=404, detail="Email is not registered")
-    elif request.purpose == "register":
-        user = session.exec(select(User).where(User.email == request.email)).first()
+    elif payload.purpose == "register":
+        user = session.exec(select(User).where(User.email == payload.email)).first()
         if user:
             raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -434,9 +440,9 @@ def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     otp_record = OTPVerification(
-        email=request.email,
+        email=payload.email,
         code=code,
-        purpose=request.purpose,
+        purpose=payload.purpose,
         expiresAt=expires_at
     )
     session.add(otp_record)
@@ -444,7 +450,7 @@ def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
 
     try:
         from mail_helper import send_otp_email
-        send_otp_email(request.email, code, request.purpose)
+        send_otp_email(payload.email, code, payload.purpose)
     except Exception as e:
         print(f"Failed to send email (probably SMTP configuration issue: {e}). The OTP is: {code}")
         # We don't raise an error here so the app can continue to the OTP screen
@@ -453,16 +459,17 @@ def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
 
 
 @router.post("/otp/verify")
-def verify_otp(request: OTPVerifyRequest, session: Session = Depends(get_session)):
+@limiter.limit("5/15 minutes")
+def verify_otp(request: Request, payload: OTPVerifyRequest, session: Session = Depends(get_session)):
     now = datetime.now(timezone.utc)
     otp_record = session.exec(
         select(OTPVerification)
-        .where(OTPVerification.email == request.email)
-        .where(OTPVerification.purpose == request.purpose)
-        .where(OTPVerification.code == request.code)
+        .where(OTPVerification.email == payload.email)
+        .where(OTPVerification.purpose == payload.purpose)
+        .where(OTPVerification.code == payload.code)
         .where(OTPVerification.expiresAt > now)
         .where(OTPVerification.verifiedAt == None)
-        .order_by(OTPVerification.createdAt.desc())
+        .order_by(desc(OTPVerification.createdAt))
     ).first()
 
     if not otp_record:
@@ -475,24 +482,25 @@ def verify_otp(request: OTPVerifyRequest, session: Session = Depends(get_session
 
 
 @router.post("/reset-password")
-def reset_password(request: PasswordResetRequest, session: Session = Depends(get_session)):
+@limiter.limit("5/15 minutes")
+def reset_password(request: Request, payload: PasswordResetRequest, session: Session = Depends(get_session)):
     otp_verified = session.exec(
         select(OTPVerification)
-        .where(OTPVerification.email == request.email)
+        .where(OTPVerification.email == payload.email)
         .where(OTPVerification.purpose == "reset_password")
         .where(OTPVerification.verifiedAt != None)
-        .order_by(OTPVerification.verifiedAt.desc())
+        .order_by(desc(OTPVerification.verifiedAt))
     ).first()
 
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    if not otp_verified or otp_verified.verifiedAt.replace(tzinfo=None) < now_utc - timedelta(minutes=15):
+    if not otp_verified or otp_verified.verifiedAt is None or otp_verified.verifiedAt.replace(tzinfo=None) < now_utc - timedelta(minutes=15):
         raise HTTPException(status_code=400, detail="OTP code has not been verified for password reset")
 
-    user = session.exec(select(User).where(User.email == request.email)).first()
+    user = session.exec(select(User).where(User.email == payload.email)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    user.password = get_password_hash(request.password)
+    user.password = get_password_hash(payload.password)
     user.updatedAt = datetime.now(timezone.utc)
     session.add(user)
     session.commit()
@@ -672,7 +680,7 @@ def get_workout_history(
     sessions = session.exec(
         select(WorkoutSession)
         .where(WorkoutSession.user_id == current_user.id)
-        .order_by(WorkoutSession.date.desc())
+        .order_by(desc(WorkoutSession.date))
         .limit(limit)
     ).all()
     return [
@@ -800,10 +808,10 @@ def get_workout_chart(
     
     # 1. Overall Daily Time (Last 30 Days)
     daily_overall = session.exec(
-        select(WorkoutSession.date, func.sum(WorkoutSession.duration_seconds))
-        .where(WorkoutSession.user_id == current_user.id, WorkoutSession.date >= thirty_days_ago)
-        .group_by(WorkoutSession.date)
-        .order_by(WorkoutSession.date)
+        cast(Any, sa_select(col(WorkoutSession.date), func.sum(col(WorkoutSession.duration_seconds)))
+        .where(col(WorkoutSession.user_id) == current_user.id, col(WorkoutSession.date) >= thirty_days_ago)
+        .group_by(col(WorkoutSession.date))
+        .order_by(col(WorkoutSession.date)))
     ).all()
     
     overall_30 = [{"date": d.isoformat(), "duration_seconds": s} for d, s in daily_overall]
@@ -811,10 +819,16 @@ def get_workout_chart(
     
     # 2. Exercise Specific Pace/Time & Form Mistakes
     daily_exercises_raw = session.exec(
-        select(WorkoutSession.date, Exercise.name, ExerciseLog.duration_seconds, ExerciseLog.reps_completed, ExerciseLog.form_mistakes)
-        .join(ExerciseLog, WorkoutSession.id == ExerciseLog.session_id)
-        .join(Exercise, ExerciseLog.exercise_id == Exercise.id)
-        .where(WorkoutSession.user_id == current_user.id, WorkoutSession.date >= thirty_days_ago)
+        cast(Any, sa_select(
+            col(WorkoutSession.date),
+            col(Exercise.name),
+            col(ExerciseLog.duration_seconds),
+            col(ExerciseLog.reps_completed),
+            col(ExerciseLog.form_mistakes)
+        )
+        .join(ExerciseLog, col(WorkoutSession.id) == col(ExerciseLog.session_id))
+        .join(Exercise, col(ExerciseLog.exercise_id) == col(Exercise.id))
+        .where(col(WorkoutSession.user_id) == current_user.id, col(WorkoutSession.date) >= thirty_days_ago))
     ).all()
     
     grouped_exercises = {}
@@ -1064,10 +1078,10 @@ def _generate_and_save_insight(user_id: str):
     from models import ExerciseLog
     recent_logs = session.exec(
         select(ExerciseLog)
-        .join(WorkoutSession, ExerciseLog.session_id == WorkoutSession.id)
+        .join(WorkoutSession, col(ExerciseLog.session_id) == col(WorkoutSession.id))
         .where(
-            WorkoutSession.user_id == user_id,
-            WorkoutSession.date >= today - timedelta(days=7)
+            col(WorkoutSession.user_id) == user_id,
+            col(WorkoutSession.date) >= today - timedelta(days=7)
         )
     ).all()
 
@@ -1120,14 +1134,14 @@ def _generate_and_save_insight(user_id: str):
     from sqlalchemy import func
     
     weekly_exercise_totals = session.exec(
-        select(Exercise.name, func.sum(ExerciseLog.reps_completed))
-        .join(ExerciseLog, Exercise.id == ExerciseLog.exercise_id)
-        .join(WorkoutSession, ExerciseLog.session_id == WorkoutSession.id)
+        cast(Any, sa_select(col(Exercise.name), func.sum(col(ExerciseLog.reps_completed)))
+        .join(ExerciseLog, col(Exercise.id) == col(ExerciseLog.exercise_id))
+        .join(WorkoutSession, col(ExerciseLog.session_id) == col(WorkoutSession.id))
         .where(
-            WorkoutSession.user_id == user_id,
-            WorkoutSession.date >= today - timedelta(days=7)
+            col(WorkoutSession.user_id) == user_id,
+            col(WorkoutSession.date) >= today - timedelta(days=7)
         )
-        .group_by(Exercise.name)
+        .group_by(col(Exercise.name)))
     ).all()
 
     exercise_totals_str = ""
@@ -1195,7 +1209,7 @@ def _generate_and_save_insight(user_id: str):
                     print(f"Model {model_name} failed in insight generation: {e}. Trying next...")
             
             ai_data = None
-            if response is not None:
+            if response is not None and response.text:
                 ai_data = json_lib.loads(response.text)
             else:
                 # Try Groq
@@ -1242,7 +1256,10 @@ def _generate_and_save_insight(user_id: str):
                             print(f"OpenAI insight generation failed: {openai_err}")
 
             if ai_data is None:
-                raise last_error
+                if last_error is not None:
+                    raise last_error
+                else:
+                    raise Exception("Failed to generate AI insight with all fallback providers")
             
             stats.latest_insight = ai_data
             stats.updatedAt = datetime.now(timezone.utc)

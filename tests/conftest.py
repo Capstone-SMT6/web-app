@@ -34,3 +34,10 @@ def client_fixture(session: Session):
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
+
+@pytest.fixture(autouse=True)
+def disable_limiter():
+    from limiter import limiter
+    limiter.enabled = False
+    yield
+    limiter.enabled = True
