@@ -424,28 +424,14 @@ async def google_login(request: Request, data: GoogleLoginRequest, session: Sess
 # OTP Routes
 # ---------------------------------------------------------------------------
 
-def send_otp_email_background(email: str, code: str, purpose: str):
-    try:
-        from mail_helper import send_otp_email
-        send_otp_email(email, code, purpose)
-    except Exception as e:
-        print(f"Failed to send email (probably SMTP configuration issue: {e}). The OTP is: {code}")
-
-
 @router.post("/otp/send")
-@limiter.limit("5/15 minutes")
-def send_otp(
-    request: Request,
-    payload: OTPSendRequest,
-    background_tasks: BackgroundTasks,
-    session: Session = Depends(get_session),
-):
-    if payload.purpose == "reset_password":
-        user = session.exec(select(User).where(User.email == payload.email)).first()
+def send_otp(request: OTPSendRequest, session: Session = Depends(get_session)):
+    if request.purpose == "reset_password":
+        user = session.exec(select(User).where(User.email == request.email)).first()
         if not user:
             raise HTTPException(status_code=404, detail="Email is not registered")
-    elif payload.purpose == "register":
-        user = session.exec(select(User).where(User.email == payload.email)).first()
+    elif request.purpose == "register":
+        user = session.exec(select(User).where(User.email == request.email)).first()
         if user:
             raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -453,28 +439,32 @@ def send_otp(
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     otp_record = OTPVerification(
-        email=payload.email,
+        email=request.email,
         code=code,
-        purpose=payload.purpose,
+        purpose=request.purpose,
         expiresAt=expires_at
     )
     session.add(otp_record)
     session.commit()
 
-    background_tasks.add_task(send_otp_email_background, payload.email, code, payload.purpose)
+    try:
+        from mail_helper import send_otp_email
+        send_otp_email(request.email, code, request.purpose)
+    except Exception as e:
+        print(f"Failed to send email (probably SMTP configuration issue: {e}). The OTP is: {code}")
+        # We don't raise an error here so the app can continue to the OTP screen
 
     return {"message": "OTP sent successfully"}
 
 
 @router.post("/otp/verify")
-@limiter.limit("5/15 minutes")
-def verify_otp(request: Request, payload: OTPVerifyRequest, session: Session = Depends(get_session)):
+def verify_otp(request: OTPVerifyRequest, session: Session = Depends(get_session)):
     now = datetime.now(timezone.utc)
     otp_record = session.exec(
         select(OTPVerification)
-        .where(OTPVerification.email == payload.email)
-        .where(OTPVerification.purpose == payload.purpose)
-        .where(OTPVerification.code == payload.code)
+        .where(OTPVerification.email == request.email)
+        .where(OTPVerification.purpose == request.purpose)
+        .where(OTPVerification.code == request.code)
         .where(OTPVerification.expiresAt > now)
         .where(OTPVerification.verifiedAt == None)
         .order_by(desc(OTPVerification.createdAt))
